@@ -1,0 +1,18 @@
+# --- Web Framework ---
+fastapi
+uvicorn[standard]
+python-multipart   # falls du Uploads/Formdata brauchst
+
+# --- Templates / PDFs ---
+jinja2
+weasyprint
+striprtf
+
+# --- Core LangChain ---
+langchain
+langchain-community
+langchain-openai
+openai
+langchain-ollama
+chromadb
+sentence-transformers
