@@ -1,0 +1,22 @@
+# --- Web Framework ---
+fastapi
+uvicorn[standard]
+python-multipart   # falls du Uploads/Formdata brauchst
+
+# --- Templates / PDFs ---
+jinja2
+weasyprint==62.3   # feste Version, da neuere manchmal Probleme machen
+striprtf
+
+# --- Core LangChain ---
+langchain==0.2.11          # feste Version für Stabilität
+langchain-community==0.2.11
+langchain-openai
+langchain-ollama
+langchain-huggingface
+langchain-chroma
+
+# --- Vektor-DB / Embeddings ---
+chromadb
+sentence-transformers
+openai
