@@ -1,22 +1,22 @@
 # --- Web Framework ---
 fastapi
 uvicorn[standard]
-python-multipart   # falls du Uploads/Formdata brauchst
+python-multipart
 
 # --- Templates / PDFs ---
 jinja2
-weasyprint==62.3   # feste Version, da neuere manchmal Probleme machen
+weasyprint==62.3
 striprtf
 
-# --- Core LangChain ---
-langchain==0.2.11          # feste Version für Stabilität
-langchain-community==0.2.11
+# --- Core LangChain (Versionen synchron halten) ---
+langchain==0.2.12
+langchain-community==0.2.12
 langchain-openai
 langchain-ollama
 langchain-huggingface
 langchain-chroma
 
 # --- Vektor-DB / Embeddings ---
-chromadb
+chromadb==1.0.21
 sentence-transformers
 openai
