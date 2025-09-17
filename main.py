@@ -6,10 +6,34 @@ from typing import Dict, Any
 from datetime import datetime
 from langchain.schema import AIMessage
 
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import FastAPI, Body, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from langchain.schema import Document as LCDocument
+
+# --- Neu: Regex für robustes JSON-Parsing aus LLM-Antworten ---
+import re
+
+JSON_ARRAY_RE = re.compile(r"\[\s*\{.*?\}\s*\]", re.DOTALL)
+CODEBLOCK_RE  = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.DOTALL)
+
+def _extract_json_array(text: str) -> str:
+    """Extrahiert das erste JSON-Array aus einem Text (auch wenn es in ```json-Codeblöcken``` steckt)."""
+    if not isinstance(text, str):
+        return ""
+    # 1) Codeblock-Inhalt prüfen
+    m = CODEBLOCK_RE.search(text)
+    if m:
+        inner = m.group(1) or ""
+        m2 = JSON_ARRAY_RE.search(inner)
+        if m2:
+            return m2.group(0).strip()
+    # 2) Direkt im Text suchen
+    m = JSON_ARRAY_RE.search(text)
+    if m:
+        return m.group(0).strip()
+    return ""
 
 # --- Lokale Module ---
 from app.db import load_products_file, build_vector_db
@@ -203,10 +227,21 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         answer = (resp.get("answer") or "").strip()
 
     # ---- JSON der Positionen parsen ----
+    # Robust: JSON-Array aus der LLM-Antwort herauslösen (auch bei ```json-Codeblöcken)
+    json_text = _extract_json_array(answer)
+    if not json_text:
+        raise HTTPException(
+            status_code=422,
+            detail=f"LLM lieferte kein gültiges JSON-Array. Preview: {answer[:200]}"
+        )
+
     try:
-        positions = parse_positions(answer)
+        positions = parse_positions(json_text)  # wichtig: bereinigtes JSON-Array übergeben
     except Exception as e:
-        raise HTTPException(500, f"JSON-Fehler: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"JSON-Fehler: {e}. Preview: {json_text[:200]}"
+        )
 
     return {"positions": positions, "raw": answer}
 
@@ -242,9 +277,6 @@ def api_pdf(payload: Dict[str, Any] = Body(...)):
     rel = os.path.relpath(pdf_path, start=OUTPUT_DIR)
     return {"pdf_url": f"/outputs/{rel}", "context": context}
 
-from fastapi import Query
-from langchain.schema import Document as LCDocument
-
 @app.get("/api/catalog")
 def api_catalog(limit: int = 50):
     # Roh-Content der geladenen Dokumente zeigen (zum Abgleichen deiner Strings)
@@ -255,7 +287,6 @@ def api_catalog(limit: int = 50):
 def api_search(q: str = Query(..., min_length=2), k: int = 8):
     docs: list[LCDocument] = RETRIEVER.get_relevant_documents(q)[:k]
     return {"query": q, "results": [d.page_content for d in docs]}
-
 
 # ---------- Lokaler Start ----------
 if __name__ == "__main__":
