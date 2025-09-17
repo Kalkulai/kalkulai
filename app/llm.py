@@ -21,7 +21,7 @@ def create_chat_llm(provider: str, model: str, temperature: float, top_p: float,
 
 
 def build_chains(llm1, llm2, retriever, debug: bool = False):
-    # Prompt 1: Chat/Erfassung (dein alter Prompt)
+    # Prompt 1: Chat/Erfassung
     prompt1 = PromptTemplate(
         input_variables=["chat_history", "human_input"],
         template=(
@@ -40,43 +40,27 @@ def build_chains(llm1, llm2, retriever, debug: bool = False):
     )
     chain1 = LLMChain(llm=llm1, prompt=prompt1, memory=memory1, verbose=debug)
 
-    # Prompt 2: Angebots-JSON (nur Template ersetzt)
+    # Prompt 2: Angebots-JSON
     prompt2 = PromptTemplate(
-        input_variables=["context", "question"],
-        template=(
-            "Beantworte ausschließlich auf Deutsch.\n"
-            "AUSGABEFORMAT (strikt): Ein JSON-Array von Objekten mit Feldern\n"
-            "[{\"nr\": number, \"name\": string, \"menge\": number|null, \"einheit\": string|null, \"epreis\": number|null}]\n"
-            "- Keine Kommentare, kein Markdown, keine zusätzlichen Felder, keine Texte außerhalb des JSON.\n"
-            "- Wenn nichts passt: gib [].\n\n"
-            "KATALOGREGELN (sehr streng):\n"
-            "- Produkte dürfen AUSSCHLIESSLICH aus dem KATALOG (Kontext) stammen.\n"
-            "- Gib die Produktnamen GENAU so zurück, wie sie im KATALOG stehen (inkl. Größen/Einheiten wie \"10 L\", \"750 ml\", \"4x5 m\").\n"
-            "- Case-insensitive Matching erlaubt, aber die AUSGABE MUSS exakt dem Katalognamen entsprechen.\n"
-            "- KEINE Synonyme, KEINE Alternativen, KEINE Halluzinationen.\n"
-            "- Wenn ein in der Frage genannter Artikel NICHT im KATALOG vorkommt: NICHT ersetzen, einfach weglassen.\n\n"
-            "VERHALTEN BEI NUTZERLISTE:\n"
-            "- Wenn die Frage unter 'Materialien:' eine Liste enthält, versuche, jeden Eintrag streng gegen den KATALOG zu matchen und gib NUR die gematchten zurück.\n"
-            "- Reihenfolge beibehalten wie in der Nutzerliste.\n"
-            "- Keine automatischen Ergänzungen.\n\n"
-            "VERHALTEN OHNE NUTZERLISTE:\n"
-            "- Wenn keine explizite Materialliste genannt ist, wähle bis zu 5 Katalogprodukte, die am besten zur Frage passen.\n\n"
-            "MENGEN & PREISE:\n"
-            "- Wenn der Nutzer eine Menge/Einheit nennt, übernimm sie; sonst setze menge=null und einheit=null (NICHT schätzen).\n"
-            "- 'epreis' NUR aus dem KATALOG übernehmen, falls im Kontext eindeutig angegeben; ansonsten epreis=null.\n"
-            "- Nummerierung 'nr' beginnt bei 1 und zählt hoch.\n\n"
-            "Kontext (KATALOG – ein Produkt pro Zeile):\n"
-            "{context}\n\n"
-            "Frage:\n"
-            "{question}\n\n"
-            "Antwort:"
+            input_variables=["context","question"],
+            template=(
+                "Beantworte ausschließlich auf Deutsch.\n"
+                "Regeln:\n"
+                "- Antworte NUR als JSON-Array mit Feldern \"nr\",\"name\",\"menge\",\"einheit\",\"epreis\" (Zahlen ohne Währungssymbol).\n"
+                "- Wenn mehrere passende Varianten im Kontext stehen, wähle die am BESTEN passende.\n"
+                "- Falls Menge nicht explizit im Frage-Text steht, nutze sinnvolle Standardmengen aus dem Kontext (z. B. 1 Gebinde, 1 Sack, 1 m² etc.).\n"
+                "- Preise (epreis) IMMER aus dem Kontext übernehmen (ohne Euro-Zeichen).\n"
+                "- Keine Kommentare, kein Markdown. Wenn wirklich nichts passt: []\n\n"
+                "Kontext:\n{context}\n\n"
+                "Frage:\n{question}\n\n"
+                "Antwort:"
+            )
         )
-    )
 
     chain2 = ConversationalRetrievalChain.from_llm(
         llm=llm2,
         retriever=retriever,
-        combine_docs_chain_kwargs={"prompt": prompt2},
+        combine_docs_chain_kwargs={"prompt": prompt2},            
         verbose=debug
     )
 
