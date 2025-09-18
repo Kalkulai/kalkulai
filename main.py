@@ -164,7 +164,7 @@ def api_chat(payload: Dict[str, str] = Body(...)):
 @app.post("/api/offer")
 def api_offer(payload: Dict[str, Any] = Body(...)):
     if not DOCUMENTS:
-        raise HTTPException(500, "Produktdaten nicht geladen (data/maler_lackierer_produkte.txt).")
+        raise HTTPException(500, "Produktdaten nicht geladen (data/bauprodukte_maurerprodukte.txt).")
     if chain2 is None:
         raise HTTPException(500, "LLM2/ Retriever nicht initialisiert.")
 
