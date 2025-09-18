@@ -1,0 +1,499 @@
+Produkt: Dispersionsfarbe weiß, matt, 10 L
+Beschreibung: Hochdeckende Innenfarbe für Wände und Decken, Nassabriebklasse 2.
+Menge: 1 Eimer
+Preis: 29.90 EUR
+
+Produkt: Dispersionsfarbe weiß, seidenmatt, 10 L
+Beschreibung: Innenfarbe für stark beanspruchte Räume, abwaschbar.
+Menge: 1 Eimer
+Preis: 31.90 EUR
+
+Produkt: Dispersionsfarbe cremeweiß, 10 L
+Beschreibung: Universelle Innenfarbe mit cremigem Farbton, gut deckend.
+Menge: 1 Eimer
+Preis: 32.50 EUR
+
+Produkt: Dispersionsfarbe hellgrau, 10 L
+Beschreibung: Trendfarbe für moderne Innenräume, scheuerbeständig.
+Menge: 1 Eimer
+Preis: 34.90 EUR
+
+Produkt: Silikatfarbe weiß, 15 L
+Beschreibung: Hoch diffusionsoffene Mineralfarbe, ideal für Altbau-Sanierungen.
+Menge: 1 Eimer
+Preis: 54.90 EUR
+
+Produkt: Fassadenfarbe weiß, 10 L
+Beschreibung: Wetterbeständige Außenfarbe, UV- und frostbeständig.
+Menge: 1 Eimer
+Preis: 44.90 EUR
+
+Produkt: Fassadenfarbe hellbeige, 10 L
+Beschreibung: Hochwertige Fassadenbeschichtung mit Lotus-Effekt.
+Menge: 1 Eimer
+Preis: 47.90 EUR
+
+Produkt: Latex-Innenfarbe glänzend, 10 L
+Beschreibung: Extrem strapazierfähige und abwaschbare Innenfarbe.
+Menge: 1 Eimer
+Preis: 39.90 EUR
+
+Produkt: Grundierung Tiefgrund, 10 L
+Beschreibung: Verfestigt stark saugende Untergründe, verbessert Haftung.
+Menge: 1 Kanister
+Preis: 24.90 EUR
+
+Produkt: Putzgrund weiß, 15 kg
+Beschreibung: Haftvermittelnder Voranstrich für mineralische Putze.
+Menge: 1 Eimer
+Preis: 28.90 EUR
+
+Produkt: Innenputz Gips, 30 kg
+Beschreibung: Feiner Gipsputz für Innenwände und Decken, leicht verarbeitbar.
+Menge: 1 Sack
+Preis: 9.90 EUR
+
+Produkt: Innenputz Kalk-Zement, 30 kg
+Beschreibung: Robuster Putz für Feuchträume und Keller.
+Menge: 1 Sack
+Preis: 11.50 EUR
+
+Produkt: Außenputz mineralisch, 30 kg
+Beschreibung: Frost- und witterungsbeständiger Außenputz.
+Menge: 1 Sack
+Preis: 12.90 EUR
+
+Produkt: Reibeputz weiß, 25 kg
+Beschreibung: Strukturputz für dekorative Oberflächen, Körnung 2 mm.
+Menge: 1 Eimer
+Preis: 33.90 EUR
+
+Produkt: Buntsteinputz, 25 kg
+Beschreibung: Dekorativer Fassadenputz mit Natursteinkörnung.
+Menge: 1 Eimer
+Preis: 49.90 EUR
+
+Produkt: Spachtelmasse fein, 20 kg
+Beschreibung: Zum Glätten von Wänden und Decken, schnell schleifbar.
+Menge: 1 Sack
+Preis: 16.90 EUR
+
+Produkt: Spachtelmasse grob, 20 kg
+Beschreibung: Zum Ausgleichen unebener Untergründe, hohe Füllkraft.
+Menge: 1 Sack
+Preis: 14.90 EUR
+
+Produkt: Renovier-Spachtel, 25 kg
+Beschreibung: Multifunktionale Spachtelmasse für Innen- und Außenbereiche.
+Menge: 1 Sack
+Preis: 19.90 EUR
+
+Produkt: Fertigspachtel, 10 L
+Beschreibung: Gebrauchsfertige Spachtelmasse im Eimer, sofort verarbeitbar.
+Menge: 1 Eimer
+Preis: 22.90 EUR
+
+Produkt: Füll- und Reparaturspachtel, 1 kg
+Beschreibung: Ideal für kleine Ausbesserungen und Löcher in Wänden.
+Menge: 1 Beutel
+Preis: 4.90 EUR
+
+Produkt: Gipskartonplatte 12,5 mm, 2600 × 1200 mm
+Beschreibung: Standard-Trockenbauplatte für Innenwände und Decken.
+Menge: 1 Platte
+Preis: 8.90 EUR
+
+Produkt: Gipskartonplatte 12,5 mm, imprägniert
+Beschreibung: Feuchtraumplatte, wasserabweisend für Bad und Küche.
+Menge: 1 Platte
+Preis: 12.50 EUR
+
+Produkt: Gipskartonplatte 15 mm, 2600 × 1200 mm
+Beschreibung: Schallschutzplatte mit erhöhter Dichte.
+Menge: 1 Platte
+Preis: 14.90 EUR
+
+Produkt: Gipsfaserplatte 12,5 mm
+Beschreibung: Robuste Trockenbauplatte, stabil und feuchteresistent.
+Menge: 1 Platte
+Preis: 13.90 EUR
+
+Produkt: Ständerprofil CW 75, 4 m
+Beschreibung: Metallprofil für Trockenbauwände, verzinkt.
+Menge: 1 Stück
+Preis: 5.90 EUR
+
+Produkt: UW-Profil 75, 4 m
+Beschreibung: Boden- und Deckenprofil für Trockenbaukonstruktionen.
+Menge: 1 Stück
+Preis: 5.50 EUR
+
+Produkt: Deckenabhänger Direktabhänger, 12,5 cm
+Beschreibung: Für abgehängte Decken im Trockenbau.
+Menge: 1 Stück
+Preis: 0.80 EUR
+
+Produkt: Schnellbauschrauben, 1000 Stück, 3,5 × 35 mm
+Beschreibung: Phosphatiert, für Gipskarton auf Metall.
+Menge: 1 Karton
+Preis: 16.90 EUR
+
+Produkt: Schnellbauschrauben, 1000 Stück, 3,5 × 25 mm
+Beschreibung: Kurzschrauben für einlagige Beplankung.
+Menge: 1 Karton
+Preis: 14.90 EUR
+
+Produkt: Fugenspachtel, 25 kg
+Beschreibung: Zum Verspachteln von Gipskartonfugen.
+Menge: 1 Sack
+Preis: 19.90 EUR
+
+Produkt: Fugendeckstreifen Papier, 50 m
+Beschreibung: Armierungsstreifen für Gipskartonfugen.
+Menge: 1 Rolle
+Preis: 7.90 EUR
+
+Produkt: Acryl weiß, 310 ml
+Beschreibung: Elastische Dichtmasse für Anschlussfugen.
+Menge: 1 Kartusche
+Preis: 2.50 EUR
+
+Produkt: Silikon neutral, transparent, 310 ml
+Beschreibung: Dichtstoff für Bäder und Küchen.
+Menge: 1 Kartusche
+Preis: 3.90 EUR
+
+Produkt: Metallwinkel 90°, 100 × 100 mm
+Beschreibung: Eckwinkel für Trockenbau- und Holzkonstruktionen.
+Menge: 1 Stück
+Preis: 1.20 EUR
+
+Produkt: Alu-Eckschutzschiene, 2,5 m
+Beschreibung: Zum Schutz von Kanten im Trockenbau.
+Menge: 1 Stück
+Preis: 2.90 EUR
+
+Produkt: Ziegelstein Hochlochziegel 24 cm
+Beschreibung: Wandziegel für tragende Außen- und Innenwände.
+Menge: 1 Stück
+Preis: 1.20 EUR
+
+Produkt: Kalksandstein Vollstein, 240 × 115 × 71 mm
+Beschreibung: Mauerstein mit hoher Druckfestigkeit.
+Menge: 1 Stück
+Preis: 0.80 EUR
+
+Produkt: Betonstein Hohlblock, 49 × 24 × 24 cm
+Beschreibung: Massiver Stein für tragende Wände und Fundamente.
+Menge: 1 Stück
+Preis: 2.90 EUR
+
+Produkt: Porenbetonstein 625 × 250 × 200 mm
+Beschreibung: Leichter Stein, wärmedämmend, einfach zu verarbeiten.
+Menge: 1 Stück
+Preis: 4.90 EUR
+
+Produkt: Mörtel Trockenmörtel, 40 kg
+Beschreibung: Universeller Mauermörtel für Ziegel und Kalksandstein.
+Menge: 1 Sack
+Preis: 7.50 EUR
+
+Produkt: Dünnbettmörtel, 25 kg
+Beschreibung: Spezialmörtel für Porenbeton und Plansteine.
+Menge: 1 Sack
+Preis: 8.90 EUR
+
+Produkt: Estrichbeton, 40 kg
+Beschreibung: Betonmischung für Estriche und kleinere Fundamente.
+Menge: 1 Sack
+Preis: 5.90 EUR
+
+Produkt: Zement CEM II 32,5 R, 25 kg
+Beschreibung: Universeller Portlandzement für Beton und Mörtel.
+Menge: 1 Sack
+Preis: 6.50 EUR
+
+Produkt: Kalkhydrat CL 90-S, 20 kg
+Beschreibung: Zum Anmischen von Mörtel und Putzen.
+Menge: 1 Sack
+Preis: 9.90 EUR
+
+Produkt: Mauersperrbahn Bitumen, 1 × 20 m
+Beschreibung: Feuchtigkeitssperre für Mauerwerk.
+Menge: 1 Rolle
+Preis: 24.90 EUR
+
+Produkt: Bewehrungsstahl B500, Ø 12 mm, 6 m
+Beschreibung: Stahlstange für Betonbewehrung.
+Menge: 1 Stück
+Preis: 9.90 EUR
+
+Produkt: Bewehrungsmatte Q188, 6 × 2,3 m
+Beschreibung: Baustahlmatte zur Flächenbewehrung.
+Menge: 1 Stück
+Preis: 49.90 EUR
+
+Produkt: Schalungssteine Beton, 50 × 25 × 20 cm
+Beschreibung: Zum Errichten von Fundament- und Stützwänden.
+Menge: 1 Stück
+Preis: 3.90 EUR
+
+Produkt: Fundamenterder Bandstahl, 30 × 3,5 mm
+Beschreibung: Verzinkter Stahl zur Fundamenterdung.
+Menge: 1 m
+Preis: 2.50 EUR
+
+Produkt: Betonrundstahl Ø 8 mm, 6 m
+Beschreibung: Für Bewehrung im Mauerwerksbau.
+Menge: 1 Stück
+Preis: 6.90 EUR
+
+Produkt: Mineralwolle Klemmfilz 120 mm
+Beschreibung: Wärmedämmung für Dach und Trockenbau.
+Menge: 1 Rolle
+Preis: 34.90 EUR
+
+Produkt: Mineralwolle Klemmfilz 160 mm
+Beschreibung: Erhöhter Wärmeschutz für Steildächer.
+Menge: 1 Rolle
+Preis: 42.90 EUR
+
+Produkt: EPS-Dämmplatte 100 mm
+Beschreibung: Wärmedämmung für Fassade (WDVS).
+Menge: 1 m²
+Preis: 8.90 EUR
+
+Produkt: XPS-Dämmplatte 60 mm
+Beschreibung: Druckfeste Dämmung für Perimeter.
+Menge: 1 m²
+Preis: 12.50 EUR
+
+Produkt: Steinwolleplatte 100 mm
+Beschreibung: Schall- und Wärmeschutz für Trennwände.
+Menge: 1 m²
+Preis: 10.90 EUR
+
+Produkt: Trittschalldämmung PE-Schaum, 5 mm
+Beschreibung: Unterlage für Estrich und Bodenbeläge.
+Menge: 1 Rolle (25 m²)
+Preis: 39.90 EUR
+
+Produkt: Dampfsperrfolie PE, 0,2 mm, 4 × 25 m
+Beschreibung: Luft- und Dampfsperre für Dächer.
+Menge: 1 Rolle
+Preis: 29.90 EUR
+
+Produkt: Klebeband Dampfsperre, 25 m
+Beschreibung: Spezialband für luftdichte Verklebungen.
+Menge: 1 Rolle
+Preis: 12.90 EUR
+
+Produkt: PU-Montageschaum, 750 ml
+Beschreibung: Einkomponenten-Schaum für Montage und Dämmung.
+Menge: 1 Dose
+Preis: 6.90 EUR
+
+Produkt: Brandschutzschaum, 750 ml
+Beschreibung: Feuerwiderstand bis 240 Minuten.
+Menge: 1 Dose
+Preis: 14.90 EUR
+
+Produkt: Steinwolle Rohrschale Ø 100 mm
+Beschreibung: Dämmung für Heizungs- und Sanitärrohre.
+Menge: 1 Stück
+Preis: 7.50 EUR
+
+Produkt: EPS-Hartschaum Gefälledämmung
+Beschreibung: Dachgefälledämmplatten für Flachdächer.
+Menge: 1 m²
+Preis: 11.90 EUR
+
+Produkt: Holzweichfaserplatte 40 mm
+Beschreibung: Diffusionsoffene Dämmung für ökologische Bauweise.
+Menge: 1 m²
+Preis: 9.90 EUR
+
+Produkt: Blähglas-Schüttung 50 l
+Beschreibung: Leichtdämmstoff für Hohlräume.
+Menge: 1 Sack
+Preis: 18.90 EUR
+
+Produkt: Zellulose-Dämmstoff lose, 15 kg
+Beschreibung: Einblasdämmung aus recyceltem Papier.
+Menge: 1 Sack
+Preis: 24.90 EUR
+
+Produkt: Zementestrich, 40 kg
+Beschreibung: Universeller Estrichmörtel für Böden im Innen- und Außenbereich.
+Menge: 1 Sack
+Preis: 6.90 EUR
+
+Produkt: Fließestrich Anhydrit, 30 kg
+Beschreibung: Selbstnivellierender Estrich für Innenräume.
+Menge: 1 Sack
+Preis: 11.90 EUR
+
+Produkt: Schnellestrich, 25 kg
+Beschreibung: Begehbar nach 3 Stunden, belegbar nach 24 Stunden.
+Menge: 1 Sack
+Preis: 14.90 EUR
+
+Produkt: Ausgleichsmasse selbstnivellierend, 25 kg
+Beschreibung: Für unebene Untergründe vor Bodenbelägen.
+Menge: 1 Sack
+Preis: 16.90 EUR
+
+Produkt: Randdämmstreifen, 8 × 150 mm, 25 m
+Beschreibung: Für Estrich-Dehnfugen.
+Menge: 1 Rolle
+Preis: 9.90 EUR
+
+Produkt: Parkettkleber elastisch, 15 kg
+Beschreibung: Dispersionskleber für Holzfußböden.
+Menge: 1 Eimer
+Preis: 49.90 EUR
+
+Produkt: Fliesenkleber Flex, 25 kg
+Beschreibung: Hochflexibler Dünnbettmörtel für Fliesen.
+Menge: 1 Sack
+Preis: 12.90 EUR
+
+Produkt: Fugenmörtel grau, 25 kg
+Beschreibung: Wasser- und schmutzabweisend, für Wand- und Bodenfliesen.
+Menge: 1 Sack
+Preis: 14.90 EUR
+
+Produkt: Fugenmörtel weiß, 25 kg
+Beschreibung: Für helle Fliesenfugen, flexibel.
+Menge: 1 Sack
+Preis: 15.50 EUR
+
+Produkt: Sockelleisten MDF weiß, 2,4 m
+Beschreibung: Lackierte Leisten für sauberen Wandabschluss.
+Menge: 1 Stück
+Preis: 4.90 EUR
+
+Produkt: Laminatboden Eiche hell, 8 mm
+Beschreibung: Strapazierfähiger Laminatboden, Klicksystem.
+Menge: 1 m²
+Preis: 13.90 EUR
+
+Produkt: Vinylboden grau, 5 mm
+Beschreibung: Wasserfester Designboden, einfach zu verlegen.
+Menge: 1 m²
+Preis: 22.90 EUR
+
+Produkt: Parkett Eiche massiv, 15 mm
+Beschreibung: Hochwertiges Echtholzparkett.
+Menge: 1 m²
+Preis: 59.90 EUR
+
+Produkt: Teppichboden grau, 4 m Breite
+Beschreibung: Weicher Velours, pflegeleicht.
+Menge: 1 m²
+Preis: 19.90 EUR
+
+Produkt: Korkboden natur, 10 mm
+Beschreibung: Wärmedämmend und elastisch.
+Menge: 1 m²
+Preis: 29.90 EUR
+
+Produkt: Maurerkelle 160 mm
+Beschreibung: Edelstahlkelle mit Holzgriff.
+Menge: 1 Stück
+Preis: 7.90 EUR
+
+Produkt: Glättekelle 280 × 120 mm
+Beschreibung: Rostfreier Stahl, ergonomischer Griff.
+Menge: 1 Stück
+Preis: 12.90 EUR
+
+Produkt: Fliesenlegerkreuz 2 mm, 500 Stück
+Beschreibung: Für gleichmäßige Fugenbreiten.
+Menge: 1 Beutel
+Preis: 4.50 EUR
+
+Produkt: Rührquirl Ø 120 mm
+Beschreibung: Für Bohrmaschine, zum Anmischen von Mörtel und Farbe.
+Menge: 1 Stück
+Preis: 14.90 EUR
+
+Produkt: Bohrhammer SDS-Plus, 800 W
+Beschreibung: Leistungsstarkes Gerät für Beton und Mauerwerk.
+Menge: 1 Stück
+Preis: 149.90 EUR
+
+Produkt: Akkuschrauber 18 V, 2 Akkus
+Beschreibung: Kompakter Schrauber mit Schnellladegerät.
+Menge: 1 Set
+Preis: 199.90 EUR
+
+Produkt: Handkreissäge 1600 W
+Beschreibung: Für präzise Holz- und Plattenschnitte.
+Menge: 1 Stück
+Preis: 179.90 EUR
+
+Produkt: Wasserwaage 100 cm
+Beschreibung: Präzise Alu-Wasserwaage mit stoßfesten Endkappen.
+Menge: 1 Stück
+Preis: 24.90 EUR
+
+Produkt: Zollstock 2 m
+Beschreibung: Holzmaßstab, weiß lackiert.
+Menge: 1 Stück
+Preis: 3.50 EUR
+
+Produkt: Cuttermesser Profi, 18 mm
+Beschreibung: Metallgehäuse mit Abbrechklingen.
+Menge: 1 Stück
+Preis: 5.90 EUR
+
+Produkt: Abdeckfolie transparent, 4 × 5 m
+Beschreibung: Zum Schutz von Möbeln und Böden.
+Menge: 1 Rolle
+Preis: 2.90 EUR
+
+Produkt: Abklebeband UV-beständig, 38 mm × 50 m
+Beschreibung: Für saubere Farbkanten.
+Menge: 1 Rolle
+Preis: 4.90 EUR
+
+Produkt: Malerrolle mittel, 25 cm
+Beschreibung: Für Dispersionsfarben auf glatten Wänden.
+Menge: 1 Stück
+Preis: 6.90 EUR
+
+Produkt: Malerpinsel Set, 5 Stück
+Beschreibung: Flach- und Ringpinsel für alle Farben.
+Menge: 1 Set
+Preis: 9.90 EUR
+
+Produkt: Schutzbrille klar
+Beschreibung: Bruchsicheres Polycarbonat, Seitenschutz.
+Menge: 1 Stück
+Preis: 4.90 EUR
+
+Produkt: Gehörschutz Kapsel
+Beschreibung: Dämmwert SNR 30 dB.
+Menge: 1 Stück
+Preis: 12.90 EUR
+
+Produkt: Arbeitshandschuhe Nitril, 12 Paar
+Beschreibung: Strapazierfähige Montagehandschuhe.
+Menge: 1 Packung
+Preis: 19.90 EUR
+
+Produkt: Baustellenhelm gelb
+Beschreibung: Sicherheitshelm nach EN 397.
+Menge: 1 Stück
+Preis: 14.90 EUR
+
+Produkt: Baufolie PE, 2 × 25 m, 200 µm
+Beschreibung: Stabile Baufolie für Abdeckungen und Betonarbeiten.
+Menge: 1 Rolle
+Preis: 39.90 EUR
+
+Produkt: Big Bag 1 m³
+Beschreibung: Gewebesack für Bauschutt und Material.
+Menge: 1 Stück
+Preis: 12.90 EUR
