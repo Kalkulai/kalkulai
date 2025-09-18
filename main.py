@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain.schema import Document as LCDocument
+from app.utils import extract_json_array  # ganz oben importieren
+
 
 # --- Neu: Regex für robustes JSON-Parsing aus LLM-Antworten ---
 import re
@@ -159,8 +161,6 @@ def api_chat(payload: Dict[str, str] = Body(...)):
     return {"reply": result, "ready_for_offer": ready}
 
 # ---- API: Angebot (LLM2 → JSON) ----
-from utils import extract_json_array  # ganz oben importieren
-
 @app.post("/api/offer")
 def api_offer(payload: Dict[str, Any] = Body(...)):
     if not DOCUMENTS:
