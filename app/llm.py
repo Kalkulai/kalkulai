@@ -1,0 +1,102 @@
+import os
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain, ConversationalRetrievalChain
+from langchain.memory import ConversationBufferWindowMemory
+
+
+def create_chat_llm(provider: str, model: str, temperature: float, top_p: float,
+                    api_key: str | None = None, base_url: str | None = None):
+    provider = provider.lower()
+    if provider == "openai":
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY fehlt – bitte als Env-Variable setzen.")
+        from langchain_openai import ChatOpenAI
+        # Hinweis: top_p wird ggf. vom Modell ignoriert, ist hier egal.
+        return ChatOpenAI(model=model, temperature=temperature, openai_api_key=api_key)
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model, temperature=temperature, top_p=top_p, base_url=base_url)
+    else:
+        raise ValueError(f"Unsupported MODEL_PROVIDER: {provider}")
+
+
+def build_chains(llm1, llm2, retriever, debug: bool = False):
+    # Prompt 1: Chat/Erfassung
+    prompt1 = PromptTemplate(
+    input_variables=["chat_history", "human_input"],
+    template=(
+        "# Maler- & Lackierer-Assistent\n"
+        "Du bist ein professioneller Assistent für Maler- und Lackierarbeiten.\n"
+        "Ziel: Mit dem Kunden chatten, Materialbedarf kalkulieren und eine Angebotsbasis schaffen.\n\n"
+        "Regeln:\n"
+        "- Antworte immer auf Deutsch, freundlich und professionell.\n"
+        "- Schreibe den Hauptteil wie ein menschliches Gespräch, klar und kurz, mit Absätzen und **Fettschrift** für Struktur.\n"
+        "- Rechne selbstständig mit den gegebenen Flächen:\n"
+        "  * Dispersionsfarbe: 1 L pro 10 m², 2 Anstriche, +10 % Reserve.\n"
+        "  * Tiefengrund: 1 L pro 15 m², 1 Auftrag, +10 % Reserve.\n"
+        "- Für weitere Materialien (Abdeckfolie, Abklebeband, Malerrollen etc.) mache sinnvolle Schätzungen mit Reserve.\n"
+        "- Bitte den Kunden am Ende der Nachricht immer um Bestätigung.\n"
+        "- Am Nachrichtenende IMMER einen separaten Datenanhang ausgeben:\n"
+        "  ---\n"
+        "  status: schätzung\n"
+        "  materialien:\n"
+        "  - name, menge=..., einheit=...\n"
+        "  ---\n"
+        "- Der obere Chat-Text darf NICHT diese Felder enthalten, nur der Datenanhang.\n\n"
+        "GESPRÄCHSVERLAUF:\n{chat_history}\n\n"
+        "KUNDE: {human_input}\n\n"
+        "ANTWORT:"
+    ),
+    )
+
+
+
+
+    memory1 = ConversationBufferWindowMemory(
+        k=4,
+        memory_key="chat_history",
+        return_messages=False,
+        human_prefix="Kunde",
+        ai_prefix="Assistent",
+    )
+    chain1 = LLMChain(llm=llm1, prompt=prompt1, memory=memory1, verbose=debug)
+
+    # Prompt 2: Angebots-JSON
+    prompt2 = PromptTemplate(
+    input_variables=["context", "question"],
+    template=(
+        "Beantworte ausschließlich auf Deutsch.\n\n"
+        "AUSGABEFORMAT (streng):\n"
+        "[{{\"nr\": number, \"name\": string, \"menge\": number|null, \"einheit\": string|null, \"epreis\": number|null}}]\n"
+        "- Keine Kommentare, kein Markdown, kein Text außerhalb des JSON.\n"
+        "- Wenn keine passenden Produkte gefunden werden: gib [].\n\n"
+        "WICHTIG:\n"
+        "- Die QUESTION enthält einen Abschnitt mit Materialangaben zwischen --- Blöcken.\n"
+        "- Analysiere ausschließlich diesen Datenanhang.\n"
+        "- Alles außerhalb der --- Trenner ignorieren.\n\n"
+        "KATALOGREGELN:\n"
+        "- Produkte dürfen ausschließlich aus dem KATALOG (Kontext) stammen.\n"
+        "- Produktnamen exakt übernehmen, inkl. Größen/Einheiten (z. B. \"10 L\", \"750 ml\").\n"
+        "- Keine Synonyme, Alternativen oder Ersetzungen.\n"
+        "- Falls ein Artikel nicht im KATALOG vorkommt: nicht aufnehmen.\n\n"
+        "MENGEN:\n"
+        "- Falls im Datenanhang Menge und Einheit stehen, übernimm sie.\n"
+        "- Falls nicht vorhanden: setze menge=null, einheit=null.\n\n"
+        "PREISE:\n"
+        "- 'epreis' nur aus dem KATALOG übernehmen, wenn eindeutig im Kontext angegeben.\n"
+        "- Ansonsten epreis=null.\n"
+        "- Nummerierung 'nr' startet bei 1 in Ausgabe-Reihenfolge.\n\n"
+        "Kontext (Katalog):\n{context}\n\n"
+        "Frage (mit Datenanhang):\n{question}\n\n"
+        "Antwort:"
+    ),
+    )
+
+    chain2 = ConversationalRetrievalChain.from_llm(
+        llm=llm2,
+        retriever=retriever,
+        combine_docs_chain_kwargs={"prompt": prompt2},            
+        verbose=debug
+    )
+
+    return chain1, chain2, memory1, prompt2
