@@ -516,7 +516,7 @@ const KalkulaiInterface = () => {
                           handleSend();
                         }
                       }}
-                      placeholder="Nachricht eingeben … Enter zum Senden, Shift+Enter für Zeilenumbruch"
+                      placeholder="Nachricht eingeben … "
                       className="w-full h-8 min-h-0 resize-none border-none outline-none text-sm leading-5 placeholder:text-muted-foreground bg-transparent p-0"
                       rows={1}
                     />
