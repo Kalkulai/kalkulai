@@ -1,0 +1,40 @@
+name: Deploy Backend to Hugging Face
+on:
+  push:
+    branches: [ main ]
+    # falls Monorepo: nur bei Backend-Änderungen bauen
+    # paths: [ 'backend/**', '.github/workflows/deploy-to-hf.yml' ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install HF CLI
+        run: pip install --upgrade huggingface_hub
+
+      - name: Push to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SPACE_ID: ${{ secrets.HF_SPACE_ID }}   # z. B. "Kalkuali/kalkulai-backend"
+        run: |
+          python - <<'PY'
+          from huggingface_hub import upload_folder
+          import os
+          upload_folder(
+              repo_id=os.environ["SPACE_ID"],
+              repo_type="space",
+              folder_path=".",  # falls Monorepo hier "backend"
+              commit_message="CI: deploy from GitHub",
+              ignore_patterns=[".git", ".github", "__pycache__", "*.ipynb_checkpoints"]
+          )
+          PY
