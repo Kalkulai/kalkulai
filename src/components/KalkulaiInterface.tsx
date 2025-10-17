@@ -1,7 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -42,6 +49,7 @@ const KalkulaiInterface = () => {
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
   const [rightFilter, setRightFilter] = useState<"all" | "wizard" | "chat">("all");
+  const navigate = useNavigate();
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -455,6 +463,38 @@ const KalkulaiInterface = () => {
                   Wizard
                 </button>
               </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    <UserCircle className="h-5 w-5" />
+                    <span className="hidden sm:inline">Profil</span>
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      navigate("/profil");
+                    }}
+                  >
+                    <User className="mr-2 h-4 w-4" />
+                    <span>Mein Profil</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      navigate("/einstellungen");
+                    }}
+                  >
+                    <Settings className="mr-2 h-4 w-4" />
+                    <span>Einstellungen</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
