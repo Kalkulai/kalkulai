@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,6 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -49,7 +49,8 @@ const KalkulaiInterface = () => {
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
   const [rightFilter, setRightFilter] = useState<"all" | "wizard" | "chat">("all");
-  const navigate = useNavigate();
+  const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -66,6 +67,36 @@ const KalkulaiInterface = () => {
   // Revenue Guard + Wizard-Kontext
   const [guard, setGuard] = useState<RevenueGuardResponse | null>(null);
   const [wizardCtx, setWizardCtx] = useState<any>(null);
+
+  const profileCategories = [
+    {
+      title: "Persönliche Daten",
+      description: "Kontaktdaten, Unternehmenszuordnung und Rechnungsanschrift pflegen.",
+    },
+    {
+      title: "Team & Rollen",
+      description: "Kolleg:innen einladen und Verantwortlichkeiten im Projekt festlegen.",
+    },
+    {
+      title: "Zugangsdaten",
+      description: "E-Mail, Passwort und Zwei-Faktor-Authentifizierung verwalten.",
+    },
+  ];
+
+  const settingsCategories = [
+    {
+      title: "Allgemeine Einstellungen",
+      description: "Standardsprache, Zeitzone und Darstellung der Oberfläche anpassen.",
+    },
+    {
+      title: "Benachrichtigungen",
+      description: "E-Mail-, In-App- und Team-Updates gezielt konfigurieren.",
+    },
+    {
+      title: "Abrechnung & Pläne",
+      description: "Tarifübersicht, Rechnungsarchiv und Zahlungsmethoden einsehen.",
+    },
+  ];
 
   // ---- Linke Historie + Autoscroll ----
   const [inputs, setInputs] = useState<InputEntry[]>([]);
@@ -476,19 +507,13 @@ const KalkulaiInterface = () => {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuItem
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      navigate("/profil");
-                    }}
+                    onSelect={() => setIsProfileDialogOpen(true)}
                   >
                     <User className="mr-2 h-4 w-4" />
                     <span>Mein Profil</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      navigate("/einstellungen");
-                    }}
+                    onSelect={() => setIsSettingsDialogOpen(true)}
                   >
                     <Settings className="mr-2 h-4 w-4" />
                     <span>Einstellungen</span>
@@ -740,6 +765,67 @@ const KalkulaiInterface = () => {
           </div>
         </div>
       </main>
+
+      {/* Dialogs */}
+      <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
+        <DialogContent className="max-w-xl space-y-6">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>Mein Profil</DialogTitle>
+            <DialogDescription>
+              Passe deine persönlichen Angaben an und bereite dein Team auf kommende Projekte vor.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {profileCategories.map((category) => (
+              <div
+                key={category.title}
+                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
+              >
+                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              Mehr Funktionen folgen im nächsten Release.
+            </span>
+            <Button variant="outline" onClick={() => setIsProfileDialogOpen(false)}>
+              Schließen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
+        <DialogContent className="max-w-xl space-y-6">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>Einstellungen</DialogTitle>
+            <DialogDescription>
+              Richte KalkulAI nach deinen Arbeitsabläufen aus und verwalte deine Präferenzen zentral.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {settingsCategories.map((category) => (
+              <div
+                key={category.title}
+                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
+              >
+                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              Hier kannst du bald feingranulare Regeln hinterlegen.
+            </span>
+            <Button variant="outline" onClick={() => setIsSettingsDialogOpen(false)}>
+              Schließen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
