@@ -227,19 +227,54 @@ def api_reset_alias():
 
 # ---------- ROBUSTE BESTÄTIGUNGS-/MATERIAL-ERKENNUNG ----------
 CONFIRM_USER_RE = re.compile(
-    r"(passen\s*so|stimmen\s*so|best[aä]tig|freigeben|erstelle\s+(?:das\s+)?angebot)",
+    r"(passen\s*so|passen|stimmen\s*so|stimmen|best[aä]tig|übernehmen|so\s*übernehmen|klingt\s*g?ut|mengen\s*(?:sind\s*)?(?:korrekt|okay|in\s*ordnung)|freigeben|erstelle\s+(?:das\s+)?angebot|ja[,!\s]*(?:bitte\s*)?(?:das\s*)?angebot)",
     re.IGNORECASE,
 )
 CONFIRM_REPLY_RE = re.compile(r"status\s*:\s*best[aä]tigt", re.IGNORECASE)
 
 # Bullets wie "- Dispersionsfarbe: 20 kg"
-BULLET_MAT_RE = re.compile(
-    r"^[\-\*]\s*([^:\n]+?)\s*:\s*([0-9]+(?:[.,][0-9]+)?)\s*([A-Za-zÄÖÜäöüm²^2]+)\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
+BULLET_LINE_RE = re.compile(r"^[\-\*]\s*([^:\n]+?)\s*:\s*(.+)$", re.MULTILINE)
+_UNIT_CANDIDATES = [
+    "m²", "m2", "m^2", "qm", "m³", "m3", "m", "lfm", "cm", "mm",
+    "kg", "g", "t", "l", "L", "ml", "dl", "cl", "liter",
+    "stück", "Stück", "stk", "Stk", "sack", "Sack",
+    "rolle", "Rolle", "rollen", "Rollen",
+    "platte", "Platte", "platten", "Platten",
+    "paket", "Paket", "pakete", "Pakete",
+    "eimer", "Eimer", "kartusche", "Kartusche", "kartuschen", "Kartuschen",
+    "set", "Set", "sets", "Sets", "beutel", "Beutel",
+]
+_UNIT_PATTERN = "|".join(sorted({re.escape(u) for u in _UNIT_CANDIDATES}, key=len, reverse=True))
+LAST_QTY_UNIT_RE = re.compile(rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
+                               re.IGNORECASE)
 
 def _normalize_unit(u: str) -> str:
-    u = (u or "").strip().replace("m2", "m²").replace("m^2", "m²").replace("Stk", "Stück")
+    u = (u or "").strip()
+    lower = u.lower()
+    if lower in {"m2", "m^2", "qm"}:
+        return "m²"
+    if lower in {"m3", "m^3"}:
+        return "m³"
+    if lower in {"stk", "stück"}:
+        return "Stück"
+    if lower in {"rolle", "rollen"}:
+        return "Rolle"
+    if lower in {"sack"}:
+        return "Sack"
+    if lower in {"platte", "platten"}:
+        return "Platte"
+    if lower in {"paket", "pakete"}:
+        return "Paket"
+    if lower in {"set", "sets"}:
+        return "Set"
+    if lower in {"kartusche", "kartuschen"}:
+        return "Kartusche"
+    if lower in {"eimer"}:
+        return "Eimer"
+    if lower in {"beutel"}:
+        return "Beutel"
+    if lower in {"liter"}:
+        return "L"
     return u
 
 def _extract_materials_from_text_any(text: str) -> list[dict]:
@@ -255,10 +290,20 @@ def _extract_materials_from_text_any(text: str) -> list[dict]:
     if items:
         return items
     # 2) Bullet-Liste "Materialbedarf"
-    for m in BULLET_MAT_RE.finditer(text or ""):
+    for m in BULLET_LINE_RE.finditer(text or ""):
         name = (m.group(1) or "").strip()
-        qty = float((m.group(2) or "0").replace(",", "."))
-        unit = _normalize_unit(m.group(3) or "")
+        rest = (m.group(2) or "").strip()
+        match_candidates = list(LAST_QTY_UNIT_RE.finditer(rest))
+        if not match_candidates:
+            continue
+        qty_match = match_candidates[-1]
+        qty_raw = qty_match.group(1) or "0"
+        unit_raw = qty_match.group(2) or ""
+        try:
+            qty = float(qty_raw.replace(",", "."))
+        except ValueError:
+            continue
+        unit = _normalize_unit(unit_raw)
         items.append({"name": name, "menge": qty, "einheit": unit})
     return items
 
