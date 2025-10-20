@@ -36,7 +36,7 @@ CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEBUG = os.getenv("DEBUG", "0") == "1"
-MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        # openai|ollama
+MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
 MODEL_LLM1      = os.getenv("MODEL_LLM1", "gpt-4o-mini")
 MODEL_LLM2      = os.getenv("MODEL_LLM2", "gpt-4o-mini")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
