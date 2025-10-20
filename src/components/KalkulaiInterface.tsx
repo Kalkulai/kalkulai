@@ -21,7 +21,7 @@ import type {
 } from "@/lib/api";
 
 // ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
-const CARD_HEIGHT = "h-[50dvh]"; // Beispiele: "h-[640px]" | "h-[70vh]" | "h-[calc(100dvh-200px)]"
+const CARD_HEIGHT = "h-[65dvh]"; // Beispiele: "h-[640px]" | "h-[70vh]" | "h-[calc(100dvh-200px)]"
 
 // ---- UI Types ----
 type UiSection = {
@@ -101,10 +101,22 @@ const KalkulaiInterface = () => {
   // ---- Linke Historie + Autoscroll ----
   const [inputs, setInputs] = useState<InputEntry[]>([]);
   const leftScrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     leftScrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [inputs]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const minHeight = 44;
+    const maxHeight = 320;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [inputText]);
 
   // ---- Backend-Reset beim Mount + lokaler Reset ----
   useEffect(() => {
@@ -146,6 +158,8 @@ const KalkulaiInterface = () => {
     const text = inputText.trim();
     if (!text || isLoading) return;
     setInputs((prev) => [...prev, { id: crypto.randomUUID(), text, ts: Date.now() }]);
+    setInputText("");
+    textareaRef.current?.focus();
   
     setIsLoading(true);
     try {
@@ -443,8 +457,8 @@ const KalkulaiInterface = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="max-w-7xl mx-auto">
+      <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
+        <div className="max-w-[1440px] mx-auto">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img
@@ -546,18 +560,18 @@ const KalkulaiInterface = () => {
       </header>
 
       {/* Main */}
-      <main className="max-w-7xl mx-auto p-6">
+      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left */}
           <div className="space-y-4">
-            <Card className={`relative p-6 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
+            <Card className={`relative p-6 lg:p-8 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
               {leftMode === "chat" ? (
                 <>
                   {/* Historie deiner Eingaben */}
                   <div className="flex-1 overflow-y-auto pr-2 space-y-4">
                     {inputs.map((m) => (
                       <div key={m.id} className="flex justify-end">
-                        <div className="max-w-[80%] rounded-2xl px-4 py-2 text-sm shadow-sm bg-primary text-primary-foreground">
+                        <div className="max-w-[80%] rounded-2xl px-4 py-2 text-base shadow-sm bg-primary text-primary-foreground">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {m.text}
                           </ReactMarkdown>
@@ -571,8 +585,9 @@ const KalkulaiInterface = () => {
                   </div>
 
                   {/* Composer */}
-                  <div className="mt-2 border rounded-lg p-2 bg-background min-h-[56px]">
+                  <div className="mt-3 border rounded-xl p-3 bg-background/80 min-h-[60px] shadow-inner">
                     <textarea
+                      ref={textareaRef}
                       value={inputText}
                       onChange={(e) => setInputText(e.target.value)}
                       onKeyDown={(e) => {
@@ -582,10 +597,10 @@ const KalkulaiInterface = () => {
                         }
                       }}
                       placeholder="Nachricht eingeben um einen Angebotsvorschlag zu erhalten"
-                      className="w-full h-8 min-h-0 resize-none border-none outline-none text-sm leading-5 placeholder:text-muted-foreground bg-transparent p-0"
+                      className="w-full min-h-[44px] resize-none border-none outline-none text-base leading-6 placeholder:text-muted-foreground bg-transparent p-0"
                       rows={1}
                     />
-                    <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center justify-between pt-2">
                       <div className="flex items-center gap-1.5">
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <MessageSquare className="w-4 h-4" />
@@ -614,12 +629,12 @@ const KalkulaiInterface = () => {
 
           {/* Right */}
           <div className="space-y-4">
-            <Card className={`p-6 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
+            <Card className={`p-7 lg:p-9 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
               {/* Kopf */}
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
-                  <p className="text-sm text-muted-foreground">Chat + Wizard</p>
+                  <p className="text-base text-muted-foreground">Chat + Wizard</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="hidden md:flex items-center gap-1 mr-2">
@@ -716,10 +731,10 @@ const KalkulaiInterface = () => {
                             {section.source}
                           </span>
                         </div>
-                        {section.subtitle && <p className="text-sm text-muted-foreground mb-3">{section.subtitle}</p>}
+                        {section.subtitle && <p className="text-base text-muted-foreground mb-3">{section.subtitle}</p>}
                         {section.description && (
                           <div
-                            className="mb-4 prose prose-sm md:prose-base max-w-none text-foreground
+                            className="mb-4 prose prose-base md:prose-lg max-w-none text-foreground
                                        prose-headings:mt-0 prose-p:my-2 prose-li:my-0
                                        prose-strong:font-semibold prose-code:px-1 prose-code:py-0.5"
                           >
@@ -741,7 +756,7 @@ const KalkulaiInterface = () => {
                   </>
                 ) : (
                   <div className="flex items-center justify-center h-full">
-                    <p className="text-muted-foreground text-center">
+                    <p className="text-base text-muted-foreground text-center">
                       Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
                     </p>
                   </div>
