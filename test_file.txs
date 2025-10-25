@@ -1,3 +1,10 @@
+<<<<<<< HEAD
 This is a test file for HF
 
 Now we test the smoke test
+=======
+This is a test file fir test ci 
+
+
+bew test
+>>>>>>> b9db51c (test push 2)
