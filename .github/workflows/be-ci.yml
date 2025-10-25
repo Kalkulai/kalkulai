@@ -1,0 +1,38 @@
+name: be-ci
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - '**.py'
+      - '.github/workflows/be-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '.github/workflows/be-ci.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run backend health check
+        run: |
+          uvicorn app:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+          curl -f http://127.0.0.1:8000/health
