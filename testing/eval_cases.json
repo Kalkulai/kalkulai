@@ -1,0 +1,27 @@
+[
+    {
+      "name": "no_data_guard",
+      "chat_history": "",
+      "human_input": "Könnt ihr mir ein Angebot machen?",
+      "expect": { "mode": "guard" }
+    },
+    {
+      "name": "tiles_estimate",
+      "chat_history": "",
+      "human_input": "Ich möchte 50 m² Fliesen legen lassen, Keramik, Standardformat.",
+      "expect": { "mode": "schaetzung", "must_include": ["status: schätzung", "Fliesen", "50", "m²"] }
+    },
+    {
+      "name": "confirm_mode",
+      "chat_history": "Vorherige Ausgabe:\n---\nstatus: schätzung\nmaterialien:\n- name=Fliesen, menge=50, einheit=m²\n- name=Fliesenkleber, menge=15, einheit=kg\n---",
+      "human_input": "passt bitte so übernehmen",
+      "expect": { "mode": "bestaetigt", "must_include": ["status: bestätigt", "Fliesen, menge=50, einheit=m²", "Fliesenkleber, menge=15"] }
+    },
+    {
+      "name": "smalltalk_filter",
+      "chat_history": "",
+      "human_input": "Wie ist das Wetter bei euch?",
+      "expect": { "mode": "guard" }
+    }
+  ]
+  

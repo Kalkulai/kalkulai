@@ -71,8 +71,9 @@ DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
 llm1 = create_chat_llm(
     provider=MODEL_PROVIDER,
     model=MODEL_LLM1,
-    temperature=0.1,
+    temperature=0.15,
     top_p=0.9,
+    seed=42,
     api_key=OPENAI_API_KEY,
     base_url=OLLAMA_BASE_URL,
 )
@@ -81,6 +82,7 @@ llm2 = create_chat_llm(
     model=MODEL_LLM2,
     temperature=0.0,
     top_p=0.8,
+    seed=42,
     api_key=OPENAI_API_KEY,
     base_url=OLLAMA_BASE_URL,
 )
