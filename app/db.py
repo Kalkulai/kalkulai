@@ -5,7 +5,7 @@ from striprtf.striprtf import rtf_to_text
 # Neuere, nicht-deprecated Imports:
 from langchain.schema import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import DocArrayInMemorySearch
 
 
 def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
@@ -32,33 +32,22 @@ def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
 
 
 def build_vector_db(documents: List[Document], chroma_dir: Path, debug: bool = False):
-    # WICHTIG: mit parents=True
+    # WICHTIG: mit parents=True (bleibt für kompatible Logs, obwohl wir in-memory arbeiten)
     chroma_dir.mkdir(parents=True, exist_ok=True)
 
     embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    # Bestehende/Leere DB öffnen
-    db = Chroma(persist_directory=str(chroma_dir), embedding_function=embedding)
-    try:
-        count = db._collection.count()
-    except Exception:
-        count = 0
-
-    # Erstbefüllung, falls leer
-    if count == 0 and documents:
-        db = Chroma.from_documents(
-            documents=documents,
-            embedding=embedding,
-            persist_directory=str(chroma_dir),
-        )
+    if documents:
+        db = DocArrayInMemorySearch.from_documents(documents=documents, embedding=embedding)
         if debug:
-            print(f"[DEBUG] Chroma neu aufgebaut mit {len(documents)} Docs")
+            print(f"[DEBUG] DocArrayInMemorySearch aufgebaut mit {len(documents)} Docs")
     else:
+        db = DocArrayInMemorySearch.from_texts(texts=[], embedding=embedding)
         if debug:
-            print(f"[DEBUG] Chroma geladen (count={count})")
+            print("[DEBUG] Keine Dokumente für den Vektor-Index gefunden")
 
     retriever = db.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 20, "fetch_k": 50, "lambda_mult": 0.5}
-    )   
+        search_type="mmr",
+        search_kwargs={"k": 20, "fetch_k": 50, "lambda_mult": 0.5}
+    )
     return db, retriever
