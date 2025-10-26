@@ -42,6 +42,7 @@ MODEL_LLM2      = os.getenv("MODEL_LLM2", "gpt-4o-mini")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
+SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
 
 # ---------- Jinja2-Env (Filter) ----------
 env = Environment(
@@ -68,37 +69,53 @@ DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
 DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
 
 # ---------- LLMs ----------
-llm1 = create_chat_llm(
-    provider=MODEL_PROVIDER,
-    model=MODEL_LLM1,
-    temperature=0.15,
-    top_p=0.9,
-    seed=42,
-    api_key=OPENAI_API_KEY,
-    base_url=OLLAMA_BASE_URL,
-)
-llm2 = create_chat_llm(
-    provider=MODEL_PROVIDER,
-    model=MODEL_LLM2,
-    temperature=0.0,
-    top_p=0.8,
-    seed=42,
-    api_key=OPENAI_API_KEY,
-    base_url=OLLAMA_BASE_URL,
-)
+llm1 = llm2 = None
+chain1 = chain2 = memory1 = PROMPT2 = None
+
+if not SKIP_LLM_SETUP:
+    llm1 = create_chat_llm(
+        provider=MODEL_PROVIDER,
+        model=MODEL_LLM1,
+        temperature=0.15,
+        top_p=0.9,
+        seed=42,
+        api_key=OPENAI_API_KEY,
+        base_url=OLLAMA_BASE_URL,
+    )
+    llm2 = create_chat_llm(
+        provider=MODEL_PROVIDER,
+        model=MODEL_LLM2,
+        temperature=0.0,
+        top_p=0.8,
+        seed=42,
+        api_key=OPENAI_API_KEY,
+        base_url=OLLAMA_BASE_URL,
+    )
 
 # ---------- Chains + Memory (global, werden per Reset neu gebaut) ----------
 def _rebuild_chains():
     global chain1, chain2, memory1, PROMPT2
+    if SKIP_LLM_SETUP:
+        chain1 = chain2 = memory1 = PROMPT2 = None
+        return
     chain1, chain2, memory1, PROMPT2 = build_chains(llm1, llm2, RETRIEVER, debug=DEBUG)
 
-_rebuild_chains()
+if not SKIP_LLM_SETUP:
+    _rebuild_chains()
 
 # ---------- Wizard: LLM1-gestützte Live-Vorschläge ----------
 SUG_RE = re.compile(
     r"name\s*=\s*(.+?),\s*menge\s*=\s*([0-9]+(?:[.,][0-9]+)?)\s*,\s*einheit\s*=\s*([A-Za-zÄÖÜäöü]+)",
     re.IGNORECASE,
 )
+
+def _ensure_llm_enabled(component: str) -> None:
+    """Guards endpoints when SKIP_LLM_SETUP=1 is active (CI smoke tests)."""
+    if SKIP_LLM_SETUP:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{component} aktuell deaktiviert (SKIP_LLM_SETUP=1 – nur Health-Check aktiv).",
+        )
 
 def _ctx_to_brief(ctx: dict) -> str:
     """Kompakte Projektbeschreibung aus Wizard-Kontext."""
@@ -136,6 +153,8 @@ def suggest_with_llm1(ctx: dict, limit: int = 6) -> List[dict]:
     """
     Ruft LLM1 (ohne Memory) auf, um Materialvorschläge in Basis-Einheiten zu schätzen.
     """
+    if SKIP_LLM_SETUP or llm1 is None:
+        raise RuntimeError("LLM1 ist deaktiviert (SKIP_LLM_SETUP=1).")
     brief = _ctx_to_brief(ctx)
     prompt = f"""
 Du bist Malermeister. Schätze den Materialbedarf in **Basis-Einheiten** (kg, L, m², m, Stück, Platte).
@@ -218,6 +237,9 @@ def api_session_reset():
     -> Nach einem Page-Reload ist alles „frisch“.
     """
     global WIZ_SESSIONS
+    if SKIP_LLM_SETUP:
+        WIZ_SESSIONS.clear()
+        return {"ok": True, "message": "LLM-Reset übersprungen: SKIP_LLM_SETUP=1 (Smoke-Test-Modus)."}
     _rebuild_chains()
     WIZ_SESSIONS.clear()
     return {"ok": True, "message": "Server state cleared (memory + wizard sessions)."}
@@ -316,6 +338,8 @@ def _make_machine_block(status: str, items: list[dict]) -> str:
 # ---- API: Chat (LLM1) ----
 @app.post("/api/chat")
 def api_chat(payload: Dict[str, str] = Body(...)):
+    if chain1 is None:
+        _ensure_llm_enabled("Chat-Funktion (LLM1)")
     message = (payload.get("message") or "").strip()
     if not message:
         raise HTTPException(400, "message required")
@@ -380,8 +404,8 @@ def api_chat(payload: Dict[str, str] = Body(...)):
 def api_offer(payload: Dict[str, Any] = Body(...)):
     if not DOCUMENTS:
         raise HTTPException(500, "Produktdaten nicht geladen (data/bauprodukte_maurerprodukte.txt).")
-    if chain2 is None:
-        raise HTTPException(500, "LLM2/ Retriever nicht initialisiert.")
+    if chain2 is None or llm2 is None:
+        _ensure_llm_enabled("Angebotsfunktion (LLM2)")
 
     message = (payload.get("message") or "").strip()
     products = payload.get("products")
@@ -423,6 +447,8 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         if not hist and not message:
             raise HTTPException(400, "No context. Provide 'message' or call /api/chat first.")
         if message:
+            if chain1 is None:
+                _ensure_llm_enabled("Chat-Funktion (LLM1)")
             _ = chain1.run(human_input=message)
             hist = memory1.load_memory_variables({}).get("chat_history", "")
         last = hist.split("Assistent:")[-1] if "Assistent:" in hist else hist
