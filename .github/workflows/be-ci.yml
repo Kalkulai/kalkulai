@@ -3,14 +3,8 @@ name: be-ci
 on:
   pull_request:
     branches: [main, staging]
-    paths:
-      - '**.py'
-      - '.github/workflows/be-ci.yml'
   push:
     branches: [main]
-    paths:
-      - '**.py'
-      - '.github/workflows/be-ci.yml'
 
 jobs:
   smoke:
