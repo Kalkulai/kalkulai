@@ -66,7 +66,11 @@ env.filters["date_format"] = _date_format
 # ---------- Daten + Vektor-DB ----------
 PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
-DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
+if SKIP_LLM_SETUP:
+    DB = None
+    RETRIEVER = None
+else:
+    DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
 
 # ---------- LLMs ----------
 llm1 = llm2 = None
@@ -527,6 +531,8 @@ def api_catalog(limit: int = 50):
 
 @app.get("/api/search")
 def api_search(q: str = Query(..., min_length=2), k: int = 8):
+    if RETRIEVER is None:
+        _ensure_llm_enabled("Suchfunktion (Vektor-DB)")
     docs: list[LCDocument] = RETRIEVER.get_relevant_documents(q)[:k]
     return {"query": q, "results": [d.page_content for d in docs]}
 
