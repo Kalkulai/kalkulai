@@ -4,8 +4,15 @@ from langchain.chains import LLMChain, ConversationalRetrievalChain
 from langchain.memory import ConversationBufferWindowMemory
 
 
-def create_chat_llm(provider: str, model: str, temperature: float, top_p: float,
-                    api_key: str | None = None, base_url: str | None = None):
+def create_chat_llm(
+    provider: str,
+    model: str,
+    temperature: float,
+    top_p: float,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    seed: int | None = None,
+):
     provider = provider.lower()
     if provider == "openai":
         if not api_key:
