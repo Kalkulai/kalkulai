@@ -3,14 +3,8 @@ name: be-ci
 on:
   pull_request:
     branches: [main, staging]
-    paths:
-      - '**.py'
-      - '.github/workflows/be-ci.yml'
   push:
     branches: [main]
-    paths:
-      - '**.py'
-      - '.github/workflows/be-ci.yml'
 
 jobs:
   smoke:
@@ -32,6 +26,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run backend health check
+        env:
+          SKIP_LLM_SETUP: "1"
         run: |
           uvicorn main:app --host 0.0.0.0 --port 8000 &
           sleep 5
