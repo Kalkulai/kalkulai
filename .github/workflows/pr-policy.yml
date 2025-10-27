@@ -69,9 +69,6 @@ jobs:
               }
 
               const isDraft = Boolean(pr.draft);
-              const labels = (pr.labels || []).map((label) => (label.name || "").toLowerCase());
-              const hasReadyLabel = labels.includes("ready for merge");
-
               // Reviews (latest state per reviewer)
               const reviews = await github.paginate(
                 github.rest.pulls.listReviews,
@@ -107,21 +104,15 @@ jobs:
               // Status-Check "PR Gatekeeper"
               let statusState;
               let statusDescription;
-              if (!hasReadyLabel) {
-                // Noch kein Label → niemals auf failure setzen
-                statusState = anyPending ? "pending" : (requirementsMet ? "success" : "pending");
-                statusDescription = "Wartet: Label 'ready for merge' + ≥1 Approval + grüne Checks.";
+              if (anyPending) {
+                statusState = "pending";
+                statusDescription = "Checks noch pending.";
+              } else if (requirementsMet) {
+                statusState = "success";
+                statusDescription = "Ready: ≥1 Approval und alle Checks sind grün.";
               } else {
-                if (anyPending) {
-                  statusState = "pending";
-                  statusDescription = "Checks noch pending.";
-                } else if (requirementsMet) {
-                  statusState = "success";
-                  statusDescription = "Ready: ≥1 Approval und alle Checks sind grün.";
-                } else {
-                  statusState = "failure";
-                  statusDescription = "Nicht bereit: min. 1 Approval und grüne Checks erforderlich.";
-                }
+                statusState = "failure";
+                statusDescription = "Nicht bereit: min. 1 Approval und grüne Checks erforderlich.";
               }
 
               await github.rest.repos.createCommitStatus({
@@ -134,38 +125,8 @@ jobs:
                 target_url: pr.html_url,
               });
 
-              // Auto-close nur, wenn Label gesetzt und Regeln verletzt
-              if (hasReadyLabel && !anyPending && !requirementsMet) {
-                const missing = [];
-                if (isDraft) missing.push("PR ist noch Draft");
-                if (!hasApproval) missing.push("kein Approval");
-                if (!statusSuccess || !checksAreGreen) missing.push("Checks nicht alle grün");
-
-                const body = [
-                  "⚠️ Diese PR wurde mit dem Label `ready for merge` markiert, erfüllt aber nicht alle Merge-Kriterien.",
-                  "",
-                  `Fehlende Punkte: ${missing.join(", ") || "unbekannt"}`,
-                  "",
-                  "Die PR wird automatisch geschlossen. Bitte behebe die Punkte und öffne anschließend eine neue PR."
-                ].join("\n");
-
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: number,
-                  body,
-                });
-
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: number,
-                  state: "closed",
-                });
-              }
-
               summary.push(
-                `PR #${number}: approvals=${hasApproval} checksGreen=${checksAreGreen && statusSuccess} draft=${isDraft} readyLabel=${hasReadyLabel} anyPending=${anyPending} -> requirementsMet=${requirementsMet}`
+                `PR #${number}: approvals=${hasApproval} checksGreen=${checksAreGreen && statusSuccess} draft=${isDraft} anyPending=${anyPending} -> requirementsMet=${requirementsMet}`
               );
             }
 
