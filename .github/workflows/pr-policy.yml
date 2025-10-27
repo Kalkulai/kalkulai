@@ -38,7 +38,6 @@ jobs:
             const repo = context.repo.repo;
             const eventName = context.eventName;
 
-            /** Collect PR numbers that need evaluation */
             const prNumbers = new Set();
             if (eventName === "pull_request_target") {
               prNumbers.add(context.payload.pull_request.number);
@@ -47,16 +46,15 @@ jobs:
             } else if (eventName === "check_suite") {
               const prs = context.payload.check_suite?.pull_requests || [];
               for (const pr of prs) {
-                if (pr && pr.number) {
+                if (pr?.number) {
                   prNumbers.add(pr.number);
                 }
               }
-            } else {
-              core.info(`No handler for event ${eventName}`);
             }
 
             if (!prNumbers.size) {
               core.info("No pull requests to evaluate for this event.");
+              core.setOutput("summary", "No pull requests evaluated.");
               return;
             }
 
@@ -65,9 +63,8 @@ jobs:
 
             for (const number of prNumbers) {
               const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
-              const prState = pr.state;
-              if (prState !== "open") {
-                summary.push(`PR #${number}: skipped (state=${prState})`);
+              if (pr.state !== "open") {
+                summary.push(`PR #${number}: skipped (state=${pr.state})`);
                 continue;
               }
 
@@ -75,32 +72,27 @@ jobs:
               const labels = (pr.labels || []).map((label) => (label.name || "").toLowerCase());
               const hasReadyLabel = labels.includes("ready for merge");
 
-              // Latest review state per user
-              const { data: reviews } = await github.rest.pulls.listReviews({
-                owner,
-                repo,
-                pull_number: number,
-                per_page: 100,
-              });
+              // Reviews (latest state per reviewer)
+              const reviews = await github.paginate(
+                github.rest.pulls.listReviews,
+                { owner, repo, pull_number: number, per_page: 100 }
+              );
               const reviewerStates = new Map();
               for (const review of reviews) {
-                if (!review.user || !review.user.login) continue;
-                reviewerStates.set(review.user.login, review.state.toUpperCase());
+                if (!review.user?.login) continue;
+                reviewerStates.set(review.user.login, (review.state || "").toUpperCase());
               }
               const hasApproval = Array.from(reviewerStates.values()).some((state) => state === "APPROVED");
 
+              // Combined status + check runs
               const sha = pr.head.sha;
               const statusResp = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: sha });
+              const combinedState = statusResp.data.state; // success | failure | pending | error
               const statuses = statusResp.data.statuses || [];
-              const statusSuccess = statusResp.data.state === "success" || statuses.length === 0;
 
-              const checksResp = await github.rest.checks.listForRef({
-                owner,
-                repo,
-                ref: sha,
-                per_page: 100,
-              });
+              const checksResp = await github.rest.checks.listForRef({ owner, repo, ref: sha, per_page: 100 });
               const checkRuns = checksResp.data.check_runs || [];
+              const anyPending = combinedState === "pending" || checkRuns.some((run) => run.status !== "completed");
               const checksAreGreen =
                 checkRuns.length === 0 ||
                 checkRuns.every((run) => {
@@ -108,12 +100,29 @@ jobs:
                   const conclusion = (run.conclusion || "").toLowerCase();
                   return allowedConclusions.has(conclusion);
                 });
+              const statusSuccess = combinedState === "success" || statuses.length === 0;
 
               const requirementsMet = hasApproval && statusSuccess && checksAreGreen && !isDraft;
-              const statusState = requirementsMet ? "success" : "failure";
-              const statusDescription = requirementsMet
-                ? "Ready: >=1 Approval und alle Checks sind grün."
-                : "Nicht bereit: min. 1 Approval und grüne Checks erforderlich.";
+
+              // Status-Check "PR Gatekeeper"
+              let statusState;
+              let statusDescription;
+              if (!hasReadyLabel) {
+                // Noch kein Label → niemals auf failure setzen
+                statusState = anyPending ? "pending" : (requirementsMet ? "success" : "pending");
+                statusDescription = "Wartet: Label 'ready for merge' + ≥1 Approval + grüne Checks.";
+              } else {
+                if (anyPending) {
+                  statusState = "pending";
+                  statusDescription = "Checks noch pending.";
+                } else if (requirementsMet) {
+                  statusState = "success";
+                  statusDescription = "Ready: ≥1 Approval und alle Checks sind grün.";
+                } else {
+                  statusState = "failure";
+                  statusDescription = "Nicht bereit: min. 1 Approval und grüne Checks erforderlich.";
+                }
+              }
 
               await github.rest.repos.createCommitStatus({
                 owner,
@@ -125,7 +134,8 @@ jobs:
                 target_url: pr.html_url,
               });
 
-              if (hasReadyLabel && !requirementsMet) {
+              // Auto-close nur, wenn Label gesetzt und Regeln verletzt
+              if (hasReadyLabel && !anyPending && !requirementsMet) {
                 const missing = [];
                 if (isDraft) missing.push("PR ist noch Draft");
                 if (!hasApproval) missing.push("kein Approval");
@@ -136,7 +146,7 @@ jobs:
                   "",
                   `Fehlende Punkte: ${missing.join(", ") || "unbekannt"}`,
                   "",
-                  "Die PR wird automatisch geschlossen. Bitte behebe die Punkte und öffne anschließend eine neue PR.",
+                  "Die PR wird automatisch geschlossen. Bitte behebe die Punkte und öffne anschließend eine neue PR."
                 ].join("\n");
 
                 await github.rest.issues.createComment({
@@ -155,7 +165,7 @@ jobs:
               }
 
               summary.push(
-                `PR #${number}: approvals=${hasApproval} checksGreen=${checksAreGreen && statusSuccess} draft=${isDraft} readyLabel=${hasReadyLabel} -> requirementsMet=${requirementsMet}`
+                `PR #${number}: approvals=${hasApproval} checksGreen=${checksAreGreen && statusSuccess} draft=${isDraft} readyLabel=${hasReadyLabel} anyPending=${anyPending} -> requirementsMet=${requirementsMet}`
               );
             }
 
