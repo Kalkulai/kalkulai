@@ -322,78 +322,57 @@ _UNIT_CANDIDATES = [
     "set", "Set", "sets", "Sets", "beutel", "Beutel",
 ]
 _UNIT_PATTERN = "|".join(sorted({re.escape(u) for u in _UNIT_CANDIDATES}, key=len, reverse=True))
-LAST_QTY_UNIT_RE = re.compile(rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
-                               re.IGNORECASE)
+LAST_QTY_UNIT_RE = re.compile(
+    rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
+    re.IGNORECASE,
+)
+
 
 def _normalize_unit(u: str) -> str:
     u = (u or "").strip()
     lower = u.lower()
-    if lower in {"m2", "m^2", "qm"}:
-        return "m²"
-    if lower in {"m3", "m^3"}:
-        return "m³"
-    if lower in {"stk", "stück"}:
-        return "Stück"
-    if lower in {"rolle", "rollen"}:
-        return "Rolle"
-    if lower in {"sack"}:
-        return "Sack"
-    if lower in {"platte", "platten"}:
-        return "Platte"
-    if lower in {"paket", "pakete"}:
-        return "Paket"
-    if lower in {"set", "sets"}:
-        return "Set"
-    if lower in {"kartusche", "kartuschen"}:
-        return "Kartusche"
-    if lower in {"eimer"}:
-        return "Eimer"
-    if lower in {"beutel"}:
-        return "Beutel"
-    if lower in {"liter"}:
-        return "L"
-    u = (u or "").strip()
-    lower = u.lower()
-    if lower in {"m2", "m^2", "qm"}:
-        return "m²"
-    if lower in {"m3", "m^3"}:
-        return "m³"
-    if lower in {"stk", "stück"}:
-        return "Stück"
-    if lower in {"rolle", "rollen"}:
-        return "Rolle"
-    if lower in {"sack"}:
-        return "Sack"
-    if lower in {"platte", "platten"}:
-        return "Platte"
-    if lower in {"paket", "pakete"}:
-        return "Paket"
-    if lower in {"set", "sets"}:
-        return "Set"
-    if lower in {"kartusche", "kartuschen"}:
-        return "Kartusche"
-    if lower in {"eimer"}:
-        return "Eimer"
-    if lower in {"beutel"}:
-        return "Beutel"
-    if lower in {"liter"}:
-        return "L"
-    return u
+    mapping = {
+        "m2": "m²",
+        "m^2": "m²",
+        "qm": "m²",
+        "m3": "m³",
+        "m^3": "m³",
+        "stk": "Stück",
+        "stück": "Stück",
+        "rolle": "Rolle",
+        "rollen": "Rolle",
+        "sack": "Sack",
+        "platte": "Platte",
+        "platten": "Platte",
+        "paket": "Paket",
+        "pakete": "Paket",
+        "set": "Set",
+        "sets": "Set",
+        "kartusche": "Kartusche",
+        "kartuschen": "Kartusche",
+        "eimer": "Eimer",
+        "beutel": "Beutel",
+        "liter": "L",
+    }
+    return mapping.get(lower, u)
+
 
 def _extract_materials_from_text_any(text: str) -> list[dict]:
     """Versucht Materialzeilen zu extrahieren – zuerst Maschinensyntax, sonst Bullet-Liste."""
-    items = []
+    items: list[dict] = []
     # 1) Maschinensyntax (--- status: … materialien: - name=…, menge=…, einheit=…)
     for m in SUG_RE.finditer(text or ""):
-        items.append({
-            "name": (m.group(1) or "").strip(),
-            "menge": float((m.group(2) or "0").replace(",", ".")),
-            "einheit": (m.group(3) or "").strip(),
-        })
+        items.append(
+            {
+                "name": (m.group(1) or "").strip(),
+                "menge": float((m.group(2) or "0").replace(",", ".")),
+                "einheit": (m.group(3) or "").strip(),
+            }
+        )
     if items:
         return items
+
     # 2) Bullet-Liste "Materialbedarf"
-    for m in BULLET_LINE_RE.finditer(text or ""):
     for m in BULLET_LINE_RE.finditer(text or ""):
         name = (m.group(1) or "").strip()
         rest = (m.group(2) or "").strip()
@@ -407,20 +386,7 @@ def _extract_materials_from_text_any(text: str) -> list[dict]:
             qty = float(qty_raw.replace(",", "."))
         except ValueError:
             continue
-        unit = _normalize_unit(unit_raw)
-        rest = (m.group(2) or "").strip()
-        match_candidates = list(LAST_QTY_UNIT_RE.finditer(rest))
-        if not match_candidates:
-            continue
-        qty_match = match_candidates[-1]
-        qty_raw = qty_match.group(1) or "0"
-        unit_raw = qty_match.group(2) or ""
-        try:
-            qty = float(qty_raw.replace(",", "."))
-        except ValueError:
-            continue
-        unit = _normalize_unit(unit_raw)
-        items.append({"name": name, "menge": qty, "einheit": unit})
+        items.append({"name": name, "menge": qty, "einheit": _normalize_unit(unit_raw)})
     return items
 
 def _make_machine_block(status: str, items: list[dict]) -> str:
