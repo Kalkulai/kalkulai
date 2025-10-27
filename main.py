@@ -14,12 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from langchain.schema import Document as LCDocument, AIMessage
-
 # Lokale Module
 from app.db import load_products_file, build_vector_db
-from app.llm import create_chat_llm, build_chains
-from app.pdf import render_pdf_from_template
 from app.utils import extract_products_from_output, parse_positions, extract_json_array
 
 
@@ -37,12 +33,18 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEBUG = os.getenv("DEBUG", "0") == "1"
 MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
+MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
 MODEL_LLM1      = os.getenv("MODEL_LLM1", "gpt-4o-mini")
 MODEL_LLM2      = os.getenv("MODEL_LLM2", "gpt-4o-mini")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
+
+if not SKIP_LLM_SETUP:
+    from app.llm import create_chat_llm, build_chains  # type: ignore
+else:  # pragma: no cover - placeholder for smoke tests
+    create_chat_llm = build_chains = None  # type: ignore
 
 # ---------- Jinja2-Env (Filter) ----------
 env = Environment(
@@ -66,6 +68,11 @@ env.filters["date_format"] = _date_format
 # ---------- Daten + Vektor-DB ----------
 PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
+if SKIP_LLM_SETUP:
+    DB = None
+    RETRIEVER = None
+else:
+    DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
 if SKIP_LLM_SETUP:
     DB = None
     RETRIEVER = None
@@ -95,6 +102,28 @@ if not SKIP_LLM_SETUP:
         api_key=OPENAI_API_KEY,
         base_url=OLLAMA_BASE_URL,
     )
+llm1 = llm2 = None
+chain1 = chain2 = memory1 = PROMPT2 = None
+
+if not SKIP_LLM_SETUP:
+    llm1 = create_chat_llm(
+        provider=MODEL_PROVIDER,
+        model=MODEL_LLM1,
+        temperature=0.15,
+        top_p=0.9,
+        seed=42,
+        api_key=OPENAI_API_KEY,
+        base_url=OLLAMA_BASE_URL,
+    )
+    llm2 = create_chat_llm(
+        provider=MODEL_PROVIDER,
+        model=MODEL_LLM2,
+        temperature=0.0,
+        top_p=0.8,
+        seed=42,
+        api_key=OPENAI_API_KEY,
+        base_url=OLLAMA_BASE_URL,
+    )
 
 # ---------- Chains + Memory (global, werden per Reset neu gebaut) ----------
 def _rebuild_chains():
@@ -102,8 +131,13 @@ def _rebuild_chains():
     if SKIP_LLM_SETUP:
         chain1 = chain2 = memory1 = PROMPT2 = None
         return
+    if SKIP_LLM_SETUP:
+        chain1 = chain2 = memory1 = PROMPT2 = None
+        return
     chain1, chain2, memory1, PROMPT2 = build_chains(llm1, llm2, RETRIEVER, debug=DEBUG)
 
+if not SKIP_LLM_SETUP:
+    _rebuild_chains()
 if not SKIP_LLM_SETUP:
     _rebuild_chains()
 
@@ -111,6 +145,15 @@ if not SKIP_LLM_SETUP:
 SUG_RE = re.compile(
     r"name\s*=\s*(.+?),\s*menge\s*=\s*([0-9]+(?:[.,][0-9]+)?)\s*,\s*einheit\s*=\s*([A-Za-zÄÖÜäöü]+)",
     re.IGNORECASE,
+)
+
+def _ensure_llm_enabled(component: str) -> None:
+    """Guards endpoints when SKIP_LLM_SETUP=1 is active (CI smoke tests)."""
+    if SKIP_LLM_SETUP:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{component} aktuell deaktiviert (SKIP_LLM_SETUP=1 – nur Health-Check aktiv).",
+        )
 )
 
 def _ensure_llm_enabled(component: str) -> None:
@@ -159,6 +202,8 @@ def suggest_with_llm1(ctx: dict, limit: int = 6) -> List[dict]:
     """
     if SKIP_LLM_SETUP or llm1 is None:
         raise RuntimeError("LLM1 ist deaktiviert (SKIP_LLM_SETUP=1).")
+    if SKIP_LLM_SETUP or llm1 is None:
+        raise RuntimeError("LLM1 ist deaktiviert (SKIP_LLM_SETUP=1).")
     brief = _ctx_to_brief(ctx)
     prompt = f"""
 Du bist Malermeister. Schätze den Materialbedarf in **Basis-Einheiten** (kg, L, m², m, Stück, Platte).
@@ -183,7 +228,7 @@ Kontext:
 {brief}
 """
     resp = llm1.invoke(prompt)
-    txt = resp.content if isinstance(resp, AIMessage) else str(resp)
+    txt = getattr(resp, "content", str(resp))
     items = _parse_materialien(txt)
 
     # Duplikate zusammenfassen (Name+Einheit)
@@ -244,6 +289,9 @@ def api_session_reset():
     if SKIP_LLM_SETUP:
         WIZ_SESSIONS.clear()
         return {"ok": True, "message": "LLM-Reset übersprungen: SKIP_LLM_SETUP=1 (Smoke-Test-Modus)."}
+    if SKIP_LLM_SETUP:
+        WIZ_SESSIONS.clear()
+        return {"ok": True, "message": "LLM-Reset übersprungen: SKIP_LLM_SETUP=1 (Smoke-Test-Modus)."}
     _rebuild_chains()
     WIZ_SESSIONS.clear()
     return {"ok": True, "message": "Server state cleared (memory + wizard sessions)."}
@@ -256,11 +304,26 @@ def api_reset_alias():
 # ---------- ROBUSTE BESTÄTIGUNGS-/MATERIAL-ERKENNUNG ----------
 CONFIRM_USER_RE = re.compile(
     r"(passen\s*so|passen|stimmen\s*so|stimmen|best[aä]tig|übernehmen|so\s*übernehmen|klingt\s*g?ut|mengen\s*(?:sind\s*)?(?:korrekt|okay|in\s*ordnung)|freigeben|erstelle\s+(?:das\s+)?angebot|ja[,!\s]*(?:bitte\s*)?(?:das\s*)?angebot)",
+    r"(passen\s*so|passen|stimmen\s*so|stimmen|best[aä]tig|übernehmen|so\s*übernehmen|klingt\s*g?ut|mengen\s*(?:sind\s*)?(?:korrekt|okay|in\s*ordnung)|freigeben|erstelle\s+(?:das\s+)?angebot|ja[,!\s]*(?:bitte\s*)?(?:das\s*)?angebot)",
     re.IGNORECASE,
 )
 CONFIRM_REPLY_RE = re.compile(r"status\s*:\s*best[aä]tigt", re.IGNORECASE)
 
 # Bullets wie "- Dispersionsfarbe: 20 kg"
+BULLET_LINE_RE = re.compile(r"^[\-\*]\s*([^:\n]+?)\s*:\s*(.+)$", re.MULTILINE)
+_UNIT_CANDIDATES = [
+    "m²", "m2", "m^2", "qm", "m³", "m3", "m", "lfm", "cm", "mm",
+    "kg", "g", "t", "l", "L", "ml", "dl", "cl", "liter",
+    "stück", "Stück", "stk", "Stk", "sack", "Sack",
+    "rolle", "Rolle", "rollen", "Rollen",
+    "platte", "Platte", "platten", "Platten",
+    "paket", "Paket", "pakete", "Pakete",
+    "eimer", "Eimer", "kartusche", "Kartusche", "kartuschen", "Kartuschen",
+    "set", "Set", "sets", "Sets", "beutel", "Beutel",
+]
+_UNIT_PATTERN = "|".join(sorted({re.escape(u) for u in _UNIT_CANDIDATES}, key=len, reverse=True))
+LAST_QTY_UNIT_RE = re.compile(rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
+                               re.IGNORECASE)
 BULLET_LINE_RE = re.compile(r"^[\-\*]\s*([^:\n]+?)\s*:\s*(.+)$", re.MULTILINE)
 _UNIT_CANDIDATES = [
     "m²", "m2", "m^2", "qm", "m³", "m3", "m", "lfm", "cm", "mm",
@@ -303,6 +366,32 @@ def _normalize_unit(u: str) -> str:
         return "Beutel"
     if lower in {"liter"}:
         return "L"
+    u = (u or "").strip()
+    lower = u.lower()
+    if lower in {"m2", "m^2", "qm"}:
+        return "m²"
+    if lower in {"m3", "m^3"}:
+        return "m³"
+    if lower in {"stk", "stück"}:
+        return "Stück"
+    if lower in {"rolle", "rollen"}:
+        return "Rolle"
+    if lower in {"sack"}:
+        return "Sack"
+    if lower in {"platte", "platten"}:
+        return "Platte"
+    if lower in {"paket", "pakete"}:
+        return "Paket"
+    if lower in {"set", "sets"}:
+        return "Set"
+    if lower in {"kartusche", "kartuschen"}:
+        return "Kartusche"
+    if lower in {"eimer"}:
+        return "Eimer"
+    if lower in {"beutel"}:
+        return "Beutel"
+    if lower in {"liter"}:
+        return "L"
     return u
 
 def _extract_materials_from_text_any(text: str) -> list[dict]:
@@ -319,7 +408,20 @@ def _extract_materials_from_text_any(text: str) -> list[dict]:
         return items
     # 2) Bullet-Liste "Materialbedarf"
     for m in BULLET_LINE_RE.finditer(text or ""):
+    for m in BULLET_LINE_RE.finditer(text or ""):
         name = (m.group(1) or "").strip()
+        rest = (m.group(2) or "").strip()
+        match_candidates = list(LAST_QTY_UNIT_RE.finditer(rest))
+        if not match_candidates:
+            continue
+        qty_match = match_candidates[-1]
+        qty_raw = qty_match.group(1) or "0"
+        unit_raw = qty_match.group(2) or ""
+        try:
+            qty = float(qty_raw.replace(",", "."))
+        except ValueError:
+            continue
+        unit = _normalize_unit(unit_raw)
         rest = (m.group(2) or "").strip()
         match_candidates = list(LAST_QTY_UNIT_RE.finditer(rest))
         if not match_candidates:
@@ -342,6 +444,8 @@ def _make_machine_block(status: str, items: list[dict]) -> str:
 # ---- API: Chat (LLM1) ----
 @app.post("/api/chat")
 def api_chat(payload: Dict[str, str] = Body(...)):
+    if chain1 is None:
+        _ensure_llm_enabled("Chat-Funktion (LLM1)")
     if chain1 is None:
         _ensure_llm_enabled("Chat-Funktion (LLM1)")
     message = (payload.get("message") or "").strip()
@@ -410,6 +514,8 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         raise HTTPException(500, "Produktdaten nicht geladen (data/bauprodukte_maurerprodukte.txt).")
     if chain2 is None or llm2 is None:
         _ensure_llm_enabled("Angebotsfunktion (LLM2)")
+    if chain2 is None or llm2 is None:
+        _ensure_llm_enabled("Angebotsfunktion (LLM2)")
 
     message = (payload.get("message") or "").strip()
     products = payload.get("products")
@@ -453,6 +559,8 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         if message:
             if chain1 is None:
                 _ensure_llm_enabled("Chat-Funktion (LLM1)")
+            if chain1 is None:
+                _ensure_llm_enabled("Chat-Funktion (LLM1)")
             _ = chain1.run(human_input=message)
             hist = memory1.load_memory_variables({}).get("chat_history", "")
         last = hist.split("Assistent:")[-1] if "Assistent:" in hist else hist
@@ -479,7 +587,7 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
     # --- LLM2 direkt ansteuern ---
     formatted = PROMPT2.format(context=context, question=product_query)
     resp = llm2.invoke(formatted)
-    answer = resp.content if isinstance(resp, AIMessage) else str(resp)
+    answer = getattr(resp, "content", str(resp))
 
     # --- JSON extrahieren ---
     try:
@@ -497,6 +605,8 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
 # ---- API: PDF bauen ----
 @app.post("/api/pdf")
 def api_pdf(payload: Dict[str, Any] = Body(...)):
+    from app.pdf import render_pdf_from_template  # Lazy import to avoid heavy deps during smoke tests
+
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
         raise HTTPException(400, "positions[] required")
@@ -533,7 +643,7 @@ def api_catalog(limit: int = 50):
 def api_search(q: str = Query(..., min_length=2), k: int = 8):
     if RETRIEVER is None:
         _ensure_llm_enabled("Suchfunktion (Vektor-DB)")
-    docs: list[LCDocument] = RETRIEVER.get_relevant_documents(q)[:k]
+    docs = RETRIEVER.get_relevant_documents(q)[:k]
     return {"query": q, "results": [d.page_content for d in docs]}
 
 # ---------- Wizard (Maler) ----------

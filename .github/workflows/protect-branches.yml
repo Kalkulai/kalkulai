@@ -1,0 +1,135 @@
+name: Protect Main and Staging Branches
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  guard:
+    name: Revert direct pushes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Detect direct pushes
+        id: detect
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const protectedBranches = new Set(["refs/heads/main", "refs/heads/staging"]);
+            const ref = context.ref;
+            const actor = context.actor;
+            const commits = context.payload.commits || [];
+
+            if (!protectedBranches.has(ref)) {
+              core.info(`Branch ${ref} is not protected. Skipping.`);
+              core.setOutput("skip", "true");
+              return;
+            }
+
+            if (actor === "github-actions[bot]") {
+              core.info("Push initiated by GitHub Actions bot (likely an automated revert). Skipping.");
+              core.setOutput("skip", "true");
+              return;
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const unauthorized = [];
+
+            for (const commit of commits) {
+              const prs = await github.paginate(
+                github.rest.repos.listPullRequestsAssociatedWithCommit,
+                { owner, repo, commit_sha: commit.id }
+              );
+              if (!prs.length) {
+                unauthorized.push({
+                  sha: commit.id,
+                  message: (commit.message || "").split("\n")[0] || "(no message)",
+                  author: commit.author?.name || commit.committer?.name || "unknown"
+                });
+              }
+            }
+
+            if (!unauthorized.length) {
+              core.info("All commits are associated with pull requests. Nothing to do.");
+              core.setOutput("skip", "true");
+              return;
+            }
+
+            // Revert newest commits first to avoid dependency issues
+            unauthorized.reverse();
+
+            core.setOutput("skip", "false");
+            core.setOutput("count", unauthorized.length.toString());
+            core.setOutput("shas", unauthorized.map((c) => c.sha).join(" "));
+            core.setOutput(
+              "details_b64",
+              Buffer.from(JSON.stringify({
+                branch: ref,
+                actor,
+                commits: unauthorized
+              })).toString("base64")
+            );
+
+      - name: Checkout repository
+        if: steps.detect.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git author
+        if: steps.detect.outputs.skip == 'false'
+        run: |
+          git config user.name "kalkulai-automation"
+          git config user.email "ci@kalkulai.local"
+        shell: bash
+
+      - name: Revert unauthorized commits
+        if: steps.detect.outputs.skip == 'false'
+        env:
+          UNAUTHORIZED_SHAS: ${{ steps.detect.outputs.shas }}
+        run: |
+          set -euo pipefail
+          for sha in $UNAUTHORIZED_SHAS; do
+            echo "Reverting $sha"
+            git revert --no-edit "$sha"
+          done
+          branch="${GITHUB_REF#refs/heads/}"
+          git push origin "HEAD:${branch}"
+        shell: bash
+
+      - name: Notify pusher
+        if: steps.detect.outputs.skip == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const payload = JSON.parse(Buffer.from("${{ steps.detect.outputs.details_b64 }}", "base64").toString("utf8"));
+            const branch = payload.branch.replace("refs/heads/", "");
+            const commits = payload.commits;
+            const actor = payload.actor;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const lines = commits.map((c, idx) => `${idx + 1}. ${c.sha.slice(0, 7)} – ${c.message} (author: ${c.author})`);
+            const body = [
+              `🚫 @${actor} direkte Pushes auf \`${branch}\` sind deaktiviert.`,
+              "",
+              "Die folgenden Commits wurden automatisch revertiert:",
+              "",
+              lines.join("\n"),
+              "",
+              "Bitte öffne stattdessen einen Pull Request gegen `main` oder `staging`."
+            ].join("\n");
+
+            // Create a new issue to make the warning visible to the team
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: `Direkter Push auf ${branch} von @${actor} revertiert`,
+              body
+            });
