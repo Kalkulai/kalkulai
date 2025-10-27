@@ -29,6 +29,8 @@ jobs:
       - name: Run backend health check
         env:
           SKIP_LLM_SETUP: "1"
+        env:
+          SKIP_LLM_SETUP: "1"
         run: |
           set -euo pipefail
           uvicorn main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
