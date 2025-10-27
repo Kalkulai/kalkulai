@@ -33,7 +33,6 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEBUG = os.getenv("DEBUG", "0") == "1"
 MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
-MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
 MODEL_LLM1      = os.getenv("MODEL_LLM1", "gpt-4o-mini")
 MODEL_LLM2      = os.getenv("MODEL_LLM2", "gpt-4o-mini")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
@@ -73,35 +72,8 @@ if SKIP_LLM_SETUP:
     RETRIEVER = None
 else:
     DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
-if SKIP_LLM_SETUP:
-    DB = None
-    RETRIEVER = None
-else:
-    DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
 
 # ---------- LLMs ----------
-llm1 = llm2 = None
-chain1 = chain2 = memory1 = PROMPT2 = None
-
-if not SKIP_LLM_SETUP:
-    llm1 = create_chat_llm(
-        provider=MODEL_PROVIDER,
-        model=MODEL_LLM1,
-        temperature=0.15,
-        top_p=0.9,
-        seed=42,
-        api_key=OPENAI_API_KEY,
-        base_url=OLLAMA_BASE_URL,
-    )
-    llm2 = create_chat_llm(
-        provider=MODEL_PROVIDER,
-        model=MODEL_LLM2,
-        temperature=0.0,
-        top_p=0.8,
-        seed=42,
-        api_key=OPENAI_API_KEY,
-        base_url=OLLAMA_BASE_URL,
-    )
 llm1 = llm2 = None
 chain1 = chain2 = memory1 = PROMPT2 = None
 
@@ -186,8 +158,6 @@ def suggest_with_llm1(ctx: dict, limit: int = 6) -> List[dict]:
     """
     Ruft LLM1 (ohne Memory) auf, um Materialvorschläge in Basis-Einheiten zu schätzen.
     """
-    if SKIP_LLM_SETUP or llm1 is None:
-        raise RuntimeError("LLM1 ist deaktiviert (SKIP_LLM_SETUP=1).")
     if SKIP_LLM_SETUP or llm1 is None:
         raise RuntimeError("LLM1 ist deaktiviert (SKIP_LLM_SETUP=1).")
     brief = _ctx_to_brief(ctx)
@@ -275,9 +245,6 @@ def api_session_reset():
     if SKIP_LLM_SETUP:
         WIZ_SESSIONS.clear()
         return {"ok": True, "message": "LLM-Reset übersprungen: SKIP_LLM_SETUP=1 (Smoke-Test-Modus)."}
-    if SKIP_LLM_SETUP:
-        WIZ_SESSIONS.clear()
-        return {"ok": True, "message": "LLM-Reset übersprungen: SKIP_LLM_SETUP=1 (Smoke-Test-Modus)."}
     _rebuild_chains()
     WIZ_SESSIONS.clear()
     return {"ok": True, "message": "Server state cleared (memory + wizard sessions)."}
@@ -289,7 +256,6 @@ def api_reset_alias():
 
 # ---------- ROBUSTE BESTÄTIGUNGS-/MATERIAL-ERKENNUNG ----------
 CONFIRM_USER_RE = re.compile(
-    r"(passen\s*so|passen|stimmen\s*so|stimmen|best[aä]tig|übernehmen|so\s*übernehmen|klingt\s*g?ut|mengen\s*(?:sind\s*)?(?:korrekt|okay|in\s*ordnung)|freigeben|erstelle\s+(?:das\s+)?angebot|ja[,!\s]*(?:bitte\s*)?(?:das\s*)?angebot)",
     r"(passen\s*so|passen|stimmen\s*so|stimmen|best[aä]tig|übernehmen|so\s*übernehmen|klingt\s*g?ut|mengen\s*(?:sind\s*)?(?:korrekt|okay|in\s*ordnung)|freigeben|erstelle\s+(?:das\s+)?angebot|ja[,!\s]*(?:bitte\s*)?(?:das\s*)?angebot)",
     re.IGNORECASE,
 )
@@ -310,68 +276,48 @@ _UNIT_CANDIDATES = [
 _UNIT_PATTERN = "|".join(sorted({re.escape(u) for u in _UNIT_CANDIDATES}, key=len, reverse=True))
 LAST_QTY_UNIT_RE = re.compile(rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
                                re.IGNORECASE)
-BULLET_LINE_RE = re.compile(r"^[\-\*]\s*([^:\n]+?)\s*:\s*(.+)$", re.MULTILINE)
-_UNIT_CANDIDATES = [
-    "m²", "m2", "m^2", "qm", "m³", "m3", "m", "lfm", "cm", "mm",
-    "kg", "g", "t", "l", "L", "ml", "dl", "cl", "liter",
-    "stück", "Stück", "stk", "Stk", "sack", "Sack",
-    "rolle", "Rolle", "rollen", "Rollen",
-    "platte", "Platte", "platten", "Platten",
-    "paket", "Paket", "pakete", "Pakete",
-    "eimer", "Eimer", "kartusche", "Kartusche", "kartuschen", "Kartuschen",
-    "set", "Set", "sets", "Sets", "beutel", "Beutel",
-]
-_UNIT_PATTERN = "|".join(sorted({re.escape(u) for u in _UNIT_CANDIDATES}, key=len, reverse=True))
-LAST_QTY_UNIT_RE = re.compile(
-    rf"([0-9]+(?:[.,][0-9]+)?)\s*({_UNIT_PATTERN})(?![A-Za-zÄÖÜäöü0-9])",
-    re.IGNORECASE,
-)
-
 
 def _normalize_unit(u: str) -> str:
     u = (u or "").strip()
     lower = u.lower()
-    mapping = {
-        "m2": "m²",
-        "m^2": "m²",
-        "qm": "m²",
-        "m3": "m³",
-        "m^3": "m³",
-        "stk": "Stück",
-        "stück": "Stück",
-        "rolle": "Rolle",
-        "rollen": "Rolle",
-        "sack": "Sack",
-        "platte": "Platte",
-        "platten": "Platte",
-        "paket": "Paket",
-        "pakete": "Paket",
-        "set": "Set",
-        "sets": "Set",
-        "kartusche": "Kartusche",
-        "kartuschen": "Kartusche",
-        "eimer": "Eimer",
-        "beutel": "Beutel",
-        "liter": "L",
-    }
-    return mapping.get(lower, u)
-
+    if lower in {"m2", "m^2", "qm"}:
+        return "m²"
+    if lower in {"m3", "m^3"}:
+        return "m³"
+    if lower in {"stk", "stück"}:
+        return "Stück"
+    if lower in {"rolle", "rollen"}:
+        return "Rolle"
+    if lower in {"sack"}:
+        return "Sack"
+    if lower in {"platte", "platten"}:
+        return "Platte"
+    if lower in {"paket", "pakete"}:
+        return "Paket"
+    if lower in {"set", "sets"}:
+        return "Set"
+    if lower in {"kartusche", "kartuschen"}:
+        return "Kartusche"
+    if lower in {"eimer"}:
+        return "Eimer"
+    if lower in {"beutel"}:
+        return "Beutel"
+    if lower in {"liter"}:
+        return "L"
+    return u
 
 def _extract_materials_from_text_any(text: str) -> list[dict]:
     """Versucht Materialzeilen zu extrahieren – zuerst Maschinensyntax, sonst Bullet-Liste."""
-    items: list[dict] = []
+    items = []
     # 1) Maschinensyntax (--- status: … materialien: - name=…, menge=…, einheit=…)
     for m in SUG_RE.finditer(text or ""):
-        items.append(
-            {
-                "name": (m.group(1) or "").strip(),
-                "menge": float((m.group(2) or "0").replace(",", ".")),
-                "einheit": (m.group(3) or "").strip(),
-            }
-        )
+        items.append({
+            "name": (m.group(1) or "").strip(),
+            "menge": float((m.group(2) or "0").replace(",", ".")),
+            "einheit": (m.group(3) or "").strip(),
+        })
     if items:
         return items
-
     # 2) Bullet-Liste "Materialbedarf"
     for m in BULLET_LINE_RE.finditer(text or ""):
         name = (m.group(1) or "").strip()
@@ -386,7 +332,8 @@ def _extract_materials_from_text_any(text: str) -> list[dict]:
             qty = float(qty_raw.replace(",", "."))
         except ValueError:
             continue
-        items.append({"name": name, "menge": qty, "einheit": _normalize_unit(unit_raw)})
+        unit = _normalize_unit(unit_raw)
+        items.append({"name": name, "menge": qty, "einheit": unit})
     return items
 
 def _make_machine_block(status: str, items: list[dict]) -> str:
@@ -396,8 +343,6 @@ def _make_machine_block(status: str, items: list[dict]) -> str:
 # ---- API: Chat (LLM1) ----
 @app.post("/api/chat")
 def api_chat(payload: Dict[str, str] = Body(...)):
-    if chain1 is None:
-        _ensure_llm_enabled("Chat-Funktion (LLM1)")
     if chain1 is None:
         _ensure_llm_enabled("Chat-Funktion (LLM1)")
     message = (payload.get("message") or "").strip()
@@ -466,8 +411,6 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         raise HTTPException(500, "Produktdaten nicht geladen (data/bauprodukte_maurerprodukte.txt).")
     if chain2 is None or llm2 is None:
         _ensure_llm_enabled("Angebotsfunktion (LLM2)")
-    if chain2 is None or llm2 is None:
-        _ensure_llm_enabled("Angebotsfunktion (LLM2)")
 
     message = (payload.get("message") or "").strip()
     products = payload.get("products")
@@ -509,8 +452,6 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         if not hist and not message:
             raise HTTPException(400, "No context. Provide 'message' or call /api/chat first.")
         if message:
-            if chain1 is None:
-                _ensure_llm_enabled("Chat-Funktion (LLM1)")
             if chain1 is None:
                 _ensure_llm_enabled("Chat-Funktion (LLM1)")
             _ = chain1.run(human_input=message)
