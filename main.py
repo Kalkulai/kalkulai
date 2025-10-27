@@ -131,8 +131,13 @@ def _rebuild_chains():
     if SKIP_LLM_SETUP:
         chain1 = chain2 = memory1 = PROMPT2 = None
         return
+    if SKIP_LLM_SETUP:
+        chain1 = chain2 = memory1 = PROMPT2 = None
+        return
     chain1, chain2, memory1, PROMPT2 = build_chains(llm1, llm2, RETRIEVER, debug=DEBUG)
 
+if not SKIP_LLM_SETUP:
+    _rebuild_chains()
 if not SKIP_LLM_SETUP:
     _rebuild_chains()
 
@@ -140,6 +145,15 @@ if not SKIP_LLM_SETUP:
 SUG_RE = re.compile(
     r"name\s*=\s*(.+?),\s*menge\s*=\s*([0-9]+(?:[.,][0-9]+)?)\s*,\s*einheit\s*=\s*([A-Za-zÄÖÜäöü]+)",
     re.IGNORECASE,
+)
+
+def _ensure_llm_enabled(component: str) -> None:
+    """Guards endpoints when SKIP_LLM_SETUP=1 is active (CI smoke tests)."""
+    if SKIP_LLM_SETUP:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{component} aktuell deaktiviert (SKIP_LLM_SETUP=1 – nur Health-Check aktiv).",
+        )
 )
 
 def _ensure_llm_enabled(component: str) -> None:
