@@ -48,7 +48,6 @@ const KalkulaiInterface = () => {
   const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
-  const [rightFilter, setRightFilter] = useState<"all" | "wizard" | "chat">("all");
   const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 
@@ -126,6 +125,7 @@ const KalkulaiInterface = () => {
       } catch (e) {
         // optional: System-Hinweis rechts anzeigen
         setSections((prev) => [
+          ...prev,
           {
             id: String(Date.now() + Math.random()),
             ts: Date.now(),
@@ -134,7 +134,6 @@ const KalkulaiInterface = () => {
             description: "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.",
             source: "system",
           },
-          ...prev,
         ]);
       } finally {
         // lokalen Zustand auch leeren
@@ -160,7 +159,8 @@ const KalkulaiInterface = () => {
     setInputs((prev) => [...prev, { id: crypto.randomUUID(), text, ts: Date.now() }]);
     setInputText("");
     textareaRef.current?.focus();
-  
+    setSections([]);
+
     setIsLoading(true);
     try {
       const chat = await api.chat(text);
@@ -170,15 +170,15 @@ const KalkulaiInterface = () => {
           : (chat?.reply as any)?.message
           ? String((chat.reply as any).message)
           : JSON.stringify(chat?.reply ?? chat ?? "", null, 2);
-  
+
       setSections((prev) => [
+        ...prev,
         mkSection({
           title: "Chat-Antwort",
           subtitle: "Erste Analyse",
           description: replyText,
           source: "chat",
         }),
-        ...prev,
       ]);
   
       // NEU: auch Nutzer-Text auf Bestätigung prüfen
@@ -194,17 +194,18 @@ const KalkulaiInterface = () => {
           if (offer?.positions?.length) {
             setPositions(offer.positions);
             setSections((prev) => [
+              ...prev,
               mkSection({
                 title: "Bestätigung erhalten",
                 subtitle: "Angebot erzeugt",
                 description: `Es wurden **${offer.positions.length} Positionen** übernommen. Du kannst jetzt das PDF erstellen.`,
                 source: "system",
               }),
-              ...prev,
             ]);
             await runRevenueGuard();
           } else {
             setSections((prev) => [
+              ...prev,
               mkSection({
                 title: "Hinweis",
                 subtitle: "Keine Positionen erkannt",
@@ -212,31 +213,30 @@ const KalkulaiInterface = () => {
                   "Die Bestätigung wurde erkannt, aber es konnten keine Katalogpositionen gemappt werden. Bitte formuliere die Produkte konkreter (z. B. „Dispersionsfarbe, 10 L“, „Tiefgrund, 10 L“, „Abdeckfolie 4×5 m“).",
                 source: "system",
               }),
-              ...prev,
             ]);
           }
         } catch (e: any) {
           setSections((prev) => [
+            ...prev,
             mkSection({
               title: "Fehler",
               subtitle: "Angebotserstellung",
               description: String(e?.message ?? "Unbekannter Fehler bei /api/offer"),
               source: "system",
             }),
-            ...prev,
           ]);
         }
       }
     } catch (e: any) {
       const err = String(e?.message ?? "Unbekannter Fehler");
       setSections((prev) => [
+        ...prev,
         mkSection({
           title: "Fehler",
           subtitle: "Chat fehlgeschlagen",
           description: err,
           source: "system",
         }),
-        ...prev,
       ]);
     } finally {
       setIsLoading(false);
@@ -251,13 +251,13 @@ const KalkulaiInterface = () => {
     if (isMakingPdf) return;
     if (positions.length === 0) {
       setSections((prev) => [
+        ...prev,
         mkSection({
           title: "Hinweis",
           subtitle: "PDF nicht möglich",
           description: "Es sind noch keine Positionen vorhanden. Bitte zuerst über Chat oder Wizard Positionen ermitteln.",
           source: "system",
         }),
-        ...prev,
       ]);
       return;
     }
@@ -273,13 +273,13 @@ const KalkulaiInterface = () => {
       await forceDownload(fullUrl, "Angebot.pdf");
     } catch (e: any) {
       setSections((prev) => [
+        ...prev,
         mkSection({
           title: "Fehler",
           subtitle: "PDF fehlgeschlagen",
           description: String(e?.message ?? "Unbekannter Fehler"),
           source: "system",
         }),
-        ...prev,
       ]);
     } finally {
       setIsMakingPdf(false);
@@ -323,13 +323,13 @@ const KalkulaiInterface = () => {
     setSections((prev) => {
       const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
       return [
+        ...withoutLive,
         mkSection({
           title: "Live-Vorschau",
           subtitle: "Mengen & Materialien (ohne Preise)",
           description: previewMd,
           source: "wizard",
         }),
-        ...withoutLive,
       ];
     });
   };
@@ -374,6 +374,7 @@ const KalkulaiInterface = () => {
         epreis: 0,
       }));
       setSections((prev) => [
+        ...prev,
         mkSection({
           title: "Hinweis",
           subtitle: "Automatische Katalog-Zuordnung",
@@ -381,7 +382,6 @@ const KalkulaiInterface = () => {
             "Konnte nicht alle Positionen automatisch zuordnen. Du kannst trotzdem ein PDF erzeugen; Preise sind zunächst 0.",
           source: "system",
         }),
-        ...prev,
       ]);
     }
 
@@ -390,13 +390,13 @@ const KalkulaiInterface = () => {
     setSections((prev) => {
       const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
       return [
+        ...withoutLive,
         mkSection({
           title: "Wizard abgeschlossen",
           subtitle: "Zusammenfassung",
           description: `**${wz.summary}**\n\nEs wurden ${wz.positions.length} Materialpositionen vorbereitet.`,
           source: "wizard",
         }),
-        ...withoutLive,
       ];
     });
 
@@ -451,8 +451,8 @@ const KalkulaiInterface = () => {
     await runRevenueGuard();
   }
 
-  // ---------- Sections filter ----------
-  const filteredSections = sections.filter((s) => (rightFilter === "all" ? true : s.source === rightFilter));
+  const chatSection = sections.find((s) => s.source === "chat");
+  const supportingSections = sections.filter((s) => s.source !== "chat");
 
   return (
     <div className="min-h-screen bg-background">
@@ -634,58 +634,30 @@ const KalkulaiInterface = () => {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
-                  <p className="text-base text-muted-foreground">Chat + Wizard</p>
+                  <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="hidden md:flex items-center gap-1 mr-2">
-                    <button
-                      className={`text-xs px-2 py-1 rounded-full ${
-                        rightFilter === "all" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60"
-                      }`}
-                      onClick={() => setRightFilter("all")}
-                    >
-                      Alle
-                    </button>
-                    <button
-                      className={`text-xs px-2 py-1 rounded-full ${
-                        rightFilter === "chat" ? "bg-emerald-100 text-emerald-700" : "text-muted-foreground hover:bg-muted/60"
-                      }`}
-                      onClick={() => setRightFilter("chat")}
-                    >
-                      Chat
-                    </button>
-                    <button
-                      className={`text-xs px-2 py-1 rounded-full ${
-                        rightFilter === "wizard" ? "bg-blue-100 text-blue-700" : "text-muted-foreground hover:bg-muted/60"
-                      }`}
-                      onClick={() => setRightFilter("wizard")}
-                    >
-                      Wizard
-                    </button>
-                  </div>
-                  <Button
-                    variant="outline"
-                    disabled={isMakingPdf || positions.length === 0}
-                    onClick={handleMakePdf}
-                    title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
-                  >
-                    <FileText className="w-4 h-4 mr-2" />
-                    {isMakingPdf ? "PDF…" : "PDF erstellen"}
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  disabled={isMakingPdf || positions.length === 0}
+                  onClick={handleMakePdf}
+                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                </Button>
               </div>
 
               {/* Scrollbarer Content-Bereich */}
               <div className="flex-1 overflow-y-auto">
-                {isLoading && sections.length === 0 && (!guard || guard.missing.length === 0) ? (
+                {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
                       <p className="text-muted-foreground">Analysiere Eingabe…</p>
                     </div>
                   </div>
-                ) : sections.length > 0 || (guard && guard.missing.length > 0) ? (
-                  <>
+                ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) ? (
+                  <div className="space-y-6">
                     {/* Revenue Guard Block */}
                     {guard && guard.missing.length > 0 && (
                       <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
@@ -714,46 +686,39 @@ const KalkulaiInterface = () => {
                       </div>
                     )}
 
-                    {/* Sections */}
-                    {filteredSections.map((section) => (
-                      <div key={section.id} className="mb-8">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="text-lg font-semibold text-foreground">{section.title}</h3>
-                          <span
-                            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded ${
-                              section.source === "wizard"
-                                ? "bg-blue-100 text-blue-700"
-                                : section.source === "chat"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-muted text-muted-foreground"
-                            }`}
-                          >
-                            {section.source}
-                          </span>
+                    {chatSection && (
+                      <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
+                        <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
+                        {chatSection.subtitle && (
+                          <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
+                        )}
+                        {chatSection.description && (
+                          <div className="prose prose-base md:prose-lg max-w-none text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {String(chatSection.description)}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {supportingSections.map((section) => (
+                      <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
+                          <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
                         </div>
-                        {section.subtitle && <p className="text-base text-muted-foreground mb-3">{section.subtitle}</p>}
+                        {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
                         {section.description && (
-                          <div
-                            className="mb-4 prose prose-base md:prose-lg max-w-none text-foreground
-                                       prose-headings:mt-0 prose-p:my-2 prose-li:my-0
-                                       prose-strong:font-semibold prose-code:px-1 prose-code:py-0.5"
-                          >
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                a: (props) => <a {...props} target="_blank" rel="noopener noreferrer" />,
-                                ul: ({ node, ...props }) => <ul className="list-disc pl-6 my-2 space-y-1" {...props} />,
-                                ol: ({ node, ...props }) => <ol className="list-decimal pl-6 my-2 space-y-1" {...props} />,
-                                li: ({ node, ...props }) => <li className="leading-relaxed" {...props} />,
-                              }}
-                            >
+                          <div className="prose prose-sm max-w-none text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
                               {String(section.description)}
                             </ReactMarkdown>
                           </div>
                         )}
                       </div>
                     ))}
-                  </>
+                  </div>
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <p className="text-base text-muted-foreground text-center">
