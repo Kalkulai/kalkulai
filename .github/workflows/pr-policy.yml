@@ -16,6 +16,11 @@ on:
   check_suite:
     types:
       - completed
+  workflow_run:
+    workflows: ["be-ci", "smoke", "PR Policy"]  # alle relevanten Workflows hier eintragen
+    types:
+      - completed
+
 
 permissions:
   contents: read
