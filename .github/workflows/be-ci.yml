@@ -21,14 +21,26 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install smoke dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir fastapi uvicorn[standard] jinja2 striprtf
 
       - name: Run backend health check
         env:
           SKIP_LLM_SETUP: "1"
         run: |
-          uvicorn main:app --host 0.0.0.0 --port 8000 &
-          sleep 5
-          curl -f http://127.0.0.1:8000/api/health
+          set -euo pipefail
+          uvicorn main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
+          APP_PID=$!
+          trap "kill $APP_PID || true" EXIT
+          for attempt in {1..15}; do
+            if curl -fs http://127.0.0.1:8000/api/health > /dev/null; then
+              echo "Health check passed on attempt $attempt"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Health endpoint did not respond in time"
+          cat uvicorn.log || true
+          exit 1

@@ -1,11 +1,38 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List
-from striprtf.striprtf import rtf_to_text
 
-# Neuere, nicht-deprecated Imports:
-from langchain.schema import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import DocArrayInMemorySearch
+try:
+    from striprtf.striprtf import rtf_to_text  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency for smoke tests
+    rtf_to_text = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional during smoke tests
+    from langchain.schema import Document  # type: ignore
+except ImportError:  # pragma: no cover - lightweight fallback for smoke tests
+    @dataclass
+    class Document:  # type: ignore[override]
+        page_content: str
+
+
+def _ensure_rtf_support(debug: bool) -> None:
+    if rtf_to_text is None:
+        msg = "striprtf ist nicht installiert – RTF-Dateien können nicht konvertiert werden."
+        if debug:
+            print(f"[WARN] {msg} Fallback: RTF wird als Klartext behandelt.")
+
+def _maybe_convert_rtf(raw: str, debug: bool) -> str:
+    if rtf_to_text is None:
+        _ensure_rtf_support(debug)
+        return raw
+    try:
+        return rtf_to_text(raw)
+    except Exception as exc:
+        if debug:
+            print(f"[WARN] RTF-Konvertierung fehlgeschlagen: {exc}")
+        return raw
 
 
 def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
@@ -14,11 +41,7 @@ def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
 
     raw = file_path.read_text(encoding="utf-8", errors="ignore")
     if file_path.suffix.lower() == ".rtf":
-        try:
-            raw = rtf_to_text(raw)
-        except Exception as e:
-            if debug:
-                print("[WARN] RTF-Konvertierung:", e)
+        raw = _maybe_convert_rtf(raw, debug)
 
     docs: List[Document] = []
     for entry in raw.split("Produkt: "):
@@ -32,6 +55,14 @@ def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
 
 
 def build_vector_db(documents: List[Document], chroma_dir: Path, debug: bool = False):
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
+        from langchain_community.vectorstores import DocArrayInMemorySearch  # type: ignore
+    except ImportError as exc:  # pragma: no cover - only happens in smoke tests
+        raise RuntimeError(
+            "LangChain Vektor-DB Abhängigkeiten fehlen. Bitte installiere die regulären requirements.txt."
+        ) from exc
+
     # WICHTIG: mit parents=True (bleibt für kompatible Logs, obwohl wir in-memory arbeiten)
     chroma_dir.mkdir(parents=True, exist_ok=True)
 
