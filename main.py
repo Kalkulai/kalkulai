@@ -14,12 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from langchain.schema import Document as LCDocument, AIMessage
-
 # Lokale Module
 from app.db import load_products_file, build_vector_db
-from app.llm import create_chat_llm, build_chains
-from app.pdf import render_pdf_from_template
 from app.utils import extract_products_from_output, parse_positions, extract_json_array
 
 
@@ -43,6 +39,11 @@ OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
+
+if not SKIP_LLM_SETUP:
+    from app.llm import create_chat_llm, build_chains  # type: ignore
+else:  # pragma: no cover - placeholder for smoke tests
+    create_chat_llm = build_chains = None  # type: ignore
 
 # ---------- Jinja2-Env (Filter) ----------
 env = Environment(
@@ -183,7 +184,7 @@ Kontext:
 {brief}
 """
     resp = llm1.invoke(prompt)
-    txt = resp.content if isinstance(resp, AIMessage) else str(resp)
+    txt = getattr(resp, "content", str(resp))
     items = _parse_materialien(txt)
 
     # Duplikate zusammenfassen (Name+Einheit)
@@ -479,7 +480,7 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
     # --- LLM2 direkt ansteuern ---
     formatted = PROMPT2.format(context=context, question=product_query)
     resp = llm2.invoke(formatted)
-    answer = resp.content if isinstance(resp, AIMessage) else str(resp)
+    answer = getattr(resp, "content", str(resp))
 
     # --- JSON extrahieren ---
     try:
@@ -497,6 +498,8 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
 # ---- API: PDF bauen ----
 @app.post("/api/pdf")
 def api_pdf(payload: Dict[str, Any] = Body(...)):
+    from app.pdf import render_pdf_from_template  # Lazy import to avoid heavy deps during smoke tests
+
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
         raise HTTPException(400, "positions[] required")
@@ -533,7 +536,7 @@ def api_catalog(limit: int = 50):
 def api_search(q: str = Query(..., min_length=2), k: int = 8):
     if RETRIEVER is None:
         _ensure_llm_enabled("Suchfunktion (Vektor-DB)")
-    docs: list[LCDocument] = RETRIEVER.get_relevant_documents(q)[:k]
+    docs = RETRIEVER.get_relevant_documents(q)[:k]
     return {"query": q, "results": [d.page_content for d in docs]}
 
 # ---------- Wizard (Maler) ----------
