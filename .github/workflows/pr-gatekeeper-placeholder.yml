@@ -1,0 +1,64 @@
+name: PR Gatekeeper Placeholder
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  mark-success:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark PR Gatekeeper success
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const shas = new Set();
+            let prNumber = context.payload.pull_request?.number;
+
+            if (context.payload.pull_request) {
+              shas.add(context.payload.pull_request.head.sha);
+            }
+
+            if (context.eventName === "check_suite") {
+              const prs = context.payload.check_suite?.pull_requests || [];
+              for (const pr of prs) {
+                if (pr?.head_sha) {
+                  shas.add(pr.head_sha);
+                }
+                if (!prNumber && pr?.number) {
+                  prNumber = pr.number;
+                }
+              }
+            }
+
+            if (!shas.size) {
+              core.info("No PR head SHAs found for this event. Skipping status update.");
+              return;
+            }
+
+            const targetUrl = prNumber
+              ? `https://github.com/${owner}/${repo}/pull/${prNumber}`
+              : `https://github.com/${owner}/${repo}`;
+
+            for (const sha of shas) {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha,
+                state: "success",
+                context: "PR Gatekeeper",
+                description: "Gatekeeper deaktiviert – Checks und Reviews manuell prüfen.",
+                target_url: targetUrl,
+              });
+            }

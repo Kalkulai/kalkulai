@@ -70,22 +70,14 @@ def build_vector_db(documents: List[Document], chroma_dir: Path, debug: bool = F
 
     if documents:
         db = DocArrayInMemorySearch.from_documents(documents=documents, embedding=embedding)
-    if documents:
-        db = DocArrayInMemorySearch.from_documents(documents=documents, embedding=embedding)
         if debug:
-            print(f"[DEBUG] DocArrayInMemorySearch aufgebaut mit {len(documents)} Docs")
             print(f"[DEBUG] DocArrayInMemorySearch aufgebaut mit {len(documents)} Docs")
     else:
         db = DocArrayInMemorySearch.from_texts(texts=[], embedding=embedding)
-        db = DocArrayInMemorySearch.from_texts(texts=[], embedding=embedding)
         if debug:
-            print("[DEBUG] Keine Dokumente für den Vektor-Index gefunden")
             print("[DEBUG] Keine Dokumente für den Vektor-Index gefunden")
 
     retriever = db.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 20, "fetch_k": 50, "lambda_mult": 0.5}
-    )
         search_type="mmr",
         search_kwargs={"k": 20, "fetch_k": 50, "lambda_mult": 0.5}
     )
