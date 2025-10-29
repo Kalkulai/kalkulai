@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ angebot_nr }} - Angebot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 3mm 3mm;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #000;
+        }
+
+        .header, .footer {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .section {
+            margin-bottom: 16px;
+        }
+
+        .angebot-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin: 20px 0 12px 0;
+        }
+
+        .textblock {
+            margin: 12px 0 20px 0;
+        }
+
+        /* Neue Tabellen-Styles */
+        table.positionen-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 13px;
+            /* box-shadow: 0 0 5px rgba(0,0,0,0.1); */
+        }
+
+        table.positionen-table thead {
+            background-color: #f5f5f5;
+            border-bottom: 2px solid #ccc;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        table.positionen-table th, table.positionen-table td {
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            text-align: left;
+            vertical-align: middle;
+        }
+
+        table.positionen-table th.center, table.positionen-table td.center {
+            text-align: center;
+        }
+
+        table.positionen-table th.right, table.positionen-table td.right {
+            text-align: right;
+        }
+
+        table.positionen-table tbody tr:hover {
+        background-color: transparent; /* Hover-Effekt deaktiviert */
+        }
+
+        .summary-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+        }
+
+        .summary-table td {
+            padding: 6px 0;
+            border: none;
+            font-size: 13px;
+        }
+
+        .summary-table .label {
+            text-align: right;
+            font-weight: bold;
+            padding-right: 12px;
+            width: 80%;
+            border-bottom: 1px solid #000000; /* Linie unter allen Labels */
+        }
+
+        .summary-table .value {
+            text-align: right;
+            width: 100px;
+            border-bottom: 1px solid #000000; /* Linie unter allen Werte-Spalten */
+        }
+
+        /* Für die letzte Zeile (Gesamtbetrag) eine dickere Linie */
+        .summary-table tr:last-child .label,
+        .summary-table tr:last-child .value {
+            border-bottom: none
+        }
+
+        .summary-table .value {
+            text-align: right;
+            width: 100px;
+        }
+
+        .info-box {
+            margin-top: 25px;
+            line-height: 1.6;
+            max-width: 600px; /* Optional: max Breite für bessere Lesbarkeit */
+        }
+
+        .info-row {
+            display: grid;
+            grid-template-columns: 130px 1fr;
+            margin-bottom: 4px;  /* Abstand verkleinert von 8px auf 4px */
+            align-items: start;
+        }
+
+        .info-row strong {
+            display: block;
+            /* Kein margin nötig, da grid sorgt für Abstand */
+        }
+
+        .justified-text {
+            text-align: justify;
+        }
+
+
+
+        hr {
+            border: none;
+            border-top: 1px solid #ccc;
+            margin: 30px 0 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div>
+            <strong>Max Mustermann GmbH</strong><br>
+            Musterstraße 1<br>
+            12345 Musterstadt<br>
+            Telefon: +49 123 4567-89<br>
+            E-Mail: max@example.com<br>
+            Web: www.example.com
+        </div>
+        <div>
+            <strong>Datum:</strong> {{ datum | date_format }}<br>
+            <strong>Angebotsnummer:</strong> {{ angebot_nr }}<br>
+            <strong>Kundennummer:</strong> K-20250601<br>
+            <strong>Kontaktperson:</strong> Lisa Schneider<br>
+            <strong>E-Mail:</strong> lisa.schneider@mustermannbau.de<br>
+            <strong>Anfrage vom:</strong> 17.06.2025<br>
+            <strong>Gültig bis:</strong> 17.07.2025
+        </div>
+    </div>
+
+    <div class="section">
+        {{ kunde }}
+    </div>
+
+    <div class="angebot-title">Angebot – Sanierung Badezimmer</div>
+
+    <div class="textblock">
+        Sehr geehrte Frau Schneider,
+        <br><br>
+        vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen folgendes Angebot:
+    </div>
+
+    <table class="positionen-table">
+        <thead>
+            <tr>
+                <th class="center">Pos.</th>
+                <th>Bezeichnung</th>
+                <th class="center">Menge</th>
+                <th class="center">Einheit</th>
+                <th class="right">Einzelpreis (€)</th>
+                <th class="right">Gesamtpreis (€)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for position in positionen %}
+            <tr>
+                <td class="center">{{ position.nr }}</td>
+                <td>{{ position.name }}</td>
+                <td class="center">{{ position.menge }}</td>
+                <td class="center">{{ position.einheit }}</td>
+                <td class="right">{{ position.epreis | currency }}</td>
+                <td class="right">{{ position.gesamtpreis | currency }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td class="center" colspan="6">Keine Positionen vorhanden</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <table class="summary-table">
+        <tr>
+            <td class="label">Zwischensumme:</td>
+            <td class="value">{{ netto_summe | currency }} €</td>
+        </tr>
+        <tr>
+            <td class="label">zzgl. {{ ust_satz_prozent }}% USt:</td>
+            <td class="value">{{ ust_betrag | currency }} €</td>
+        </tr>
+        <tr>
+            <td class="label"><strong>Gesamtbetrag:</strong></td>
+            <td class="value"><strong>{{ brutto_summe | currency }} €</strong></td>
+        </tr>
+    </table>
+
+    <div class="info-box">
+        <div class="info-row">
+            <strong>Lieferweg:</strong>
+            <div>Lieferung frei Bordsteinkante durch Spedition</div>
+        </div>
+        <div class="info-row">
+            <strong>Liefertermin:</strong>
+            <div>ca. 2–3 Wochen nach Auftragsbestätigung</div>
+        </div>
+        <div class="info-row">
+            <strong>Konditionen:</strong>
+            <div class="justified-text">
+                Zahlung innerhalb von 14 Tagen ohne Abzug, Eigentumsvorbehalt bis zur vollständigen Zahlung
+            </div>
+        </div>
+    </div>
+    <br>
+
+    <div class="textblock">
+        Mit freundlichen Grüßen<br>
+        Max Mustermann
+    </div>
+   
+    <hr>
+
+
+    <div class="footer">
+        <div>
+            Geschäftsführer: Max Mustermann
+        </div>
+        <div>
+            Bank: Sparkasse Passau<br>
+            IBAN: DE13958390583920552
+        </div>
+        <div>
+            E-Mail: max@example.com<br>
+            Web: www.example.com
+        </div>
+    </div>
+
+</body>
+</html>

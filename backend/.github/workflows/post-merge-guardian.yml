@@ -1,0 +1,161 @@
+name: Post Merge Guardian
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+
+jobs:
+  enforce:
+    if: github.event.pull_request.merged == true && contains(fromJson('["main","staging"]'), github.event.pull_request.base.ref)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate merge compliance
+        id: evaluate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+
+            const number = pr.number;
+            const baseBranch = pr.base.ref;
+            const mergeCommit = pr.merge_commit_sha;
+
+            // Basic safety checks
+            if (!mergeCommit) {
+              core.info("PR has no merge commit SHA. Skipping.");
+              return;
+            }
+
+            if (pr.draft) {
+              core.setOutput("revert_reason", "Draft PR wurde gemergt");
+            }
+
+            // Load review approvals
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                owner,
+                repo,
+                pull_number: number,
+                per_page: 100,
+              }
+            );
+            const approvalMap = new Map();
+            for (const review of reviews) {
+              if (!review.user?.login) continue;
+              approvalMap.set(review.user.login, review.state.toUpperCase());
+            }
+            const hasApproval = Array.from(approvalMap.values()).some((state) => state === "APPROVED");
+
+            if (!hasApproval && !core.getOutput("revert_reason")) {
+              core.setOutput("revert_reason", "Merge ohne gültiges Review");
+            }
+
+            // Combined status + checks for merge commit
+            const combinedStatus = await github.rest.repos.getCombinedStatusForRef({
+              owner,
+              repo,
+              ref: mergeCommit,
+            });
+            const combinedState = combinedStatus.data.state; // success, failure, pending, error
+
+            const checks = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: mergeCommit,
+              per_page: 100,
+            });
+
+            const allowedConclusions = new Set(["success", "neutral", "skipped"]);
+            const checkRunsOk =
+              checks.data.check_runs.length === 0 ||
+              checks.data.check_runs.every((run) => {
+                if (run.status !== "completed") return false;
+                const conclusion = (run.conclusion || "").toLowerCase();
+                return allowedConclusions.has(conclusion);
+              });
+
+            if ((combinedState !== "success" && combinedState !== "pending") || !checkRunsOk) {
+              const reason = combinedState === "pending" ? "Checks noch nicht abgeschlossen" : "Checks fehlgeschlagen";
+              if (!core.getOutput("revert_reason")) {
+                core.setOutput("revert_reason", reason);
+              }
+            }
+
+            core.setOutput("merge_commit", mergeCommit);
+            core.setOutput("base_branch", baseBranch);
+            core.setOutput("has_approval", String(hasApproval));
+            core.setOutput("combined_state", combinedState);
+            core.setOutput("checks_ok", String(checkRunsOk));
+
+      - name: Decide on revert
+        id: decide
+        run: |
+          if [ -z "${{ steps.evaluate.outputs.revert_reason }}" ]; then
+            echo "Merge compliance satisfied. Nothing to do."
+            exit 0
+          fi
+          echo "Revert required because: ${{ steps.evaluate.outputs.revert_reason }}"
+          echo "trigger_revert=true" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Checkout repository
+        if: steps.decide.outputs.trigger_revert == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git author
+        if: steps.decide.outputs.trigger_revert == 'true'
+        run: |
+          git config user.name "kalkulai-automation"
+          git config user.email "ci@kalkulai.local"
+        shell: bash
+
+      - name: Revert merge commit
+        if: steps.decide.outputs.trigger_revert == 'true'
+        env:
+          MERGE_SHA: ${{ steps.evaluate.outputs.merge_commit }}
+          BASE_BRANCH: ${{ steps.evaluate.outputs.base_branch }}
+        run: |
+          set -euo pipefail
+          git revert --no-edit "$MERGE_SHA"
+          git push origin "HEAD:${BASE_BRANCH}"
+        shell: bash
+
+      - name: Post notification
+        if: steps.decide.outputs.trigger_revert == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+
+            const reason = core.getInput("reason", { required: false }) || "${{ steps.evaluate.outputs.revert_reason }}";
+            const mergeCommit = "${{ steps.evaluate.outputs.merge_commit }}";
+            const summary = [
+              `⚠️ Merge von PR #${pr.number} auf \`${pr.base.ref}\` wurde rückgängig gemacht.`,
+              "",
+              `Grund: ${reason}`,
+              "",
+              `Revert-Commit: ${mergeCommit}`,
+              "",
+              "Bitte erfülle alle Merge-Kriterien (≥1 Review, grüne Checks) und öffne erneut eine PR."
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: summary,
+            });

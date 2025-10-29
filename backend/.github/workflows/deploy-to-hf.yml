@@ -1,0 +1,93 @@
+name: Deploy Backend to Hugging Face
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-to-hf.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-hf-backend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (mit LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps (HF Hub + High-Speed Upload)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade huggingface_hub hf_transfer
+          echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> $GITHUB_ENV
+
+      - name: Deploy & wait for Space (RUNNING)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SPACE_ID: ${{ secrets.HF_SPACE_ID }}   # z. B. "Kalkuali/kalkulai-backend"
+        run: |
+          python - <<'PY'
+          import os, time, sys
+          from huggingface_hub import HfApi, upload_folder, SpaceRuntime
+
+          token   = os.environ["HF_TOKEN"]
+          repo_id = os.environ["SPACE_ID"]
+          api     = HfApi(token=token)
+
+          # Dateien hochladen (nur Backend-Ordner)
+          upload_folder(
+              repo_id=repo_id,
+              repo_type="space",
+              folder_path="backend",  # falls kein Monorepo -> "." setzen
+              commit_message="CI: deploy from GitHub",
+              ignore_patterns=[
+                  ".git", ".github", "__pycache__", "*.ipynb_checkpoints",
+                  "**/.DS_Store", "**/.pytest_cache", "**/.ruff_cache"
+              ]
+          )
+
+          # Optional: Space neu starten (idempotent)
+          try:
+              api.restart_space(repo_id)
+          except Exception:
+              pass
+
+          # Auf RUNNING warten (Timeout 10 Min)
+          deadline = time.time() + 600
+          last = None
+          while time.time() < deadline:
+              rt = api.get_space_runtime(repo_id)
+              stage = rt.stage if rt else None
+              if stage == SpaceRuntime.Stage.RUNNING:
+                  print("Space status: RUNNING ✅")
+                  sys.exit(0)
+              if stage in {SpaceRuntime.Stage.BUILD_ERROR, SpaceRuntime.Stage.CRASHING}:
+                  print(f"Space status: {stage} ❌")
+                  logs_url = f"https://huggingface.co/spaces/{repo_id}?logs=build"
+                  print(f"Check build logs: {logs_url}")
+                  sys.exit(1)
+              if stage != last:
+                  print(f"Waiting… current stage: {stage}")
+                  last = stage
+              time.sleep(10)
+
+          print(f"Timed out waiting for RUNNING ⏳ (last stage={last})")
+          logs_url = f"https://huggingface.co/spaces/{repo_id}?logs=build"
+          print(f"Check build logs: {logs_url}")
+          sys.exit(1)
+          PY
