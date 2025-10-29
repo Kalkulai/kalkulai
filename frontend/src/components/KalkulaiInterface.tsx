@@ -1,0 +1,813 @@
+import { useState, useRef, useEffect } from "react";
+import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { api } from "@/lib/api";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
+
+import type {
+  RevenueGuardResponse,
+  RevenueGuardSuggestion,
+  WizardStepResponse,
+} from "@/lib/api";
+
+// ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
+const CARD_HEIGHT = "h-[65dvh]"; // Beispiele: "h-[640px]" | "h-[70vh]" | "h-[calc(100dvh-200px)]"
+
+// ---- UI Types ----
+type UiSection = {
+  id?: string;
+  ts?: number;
+  title: string;
+  subtitle?: string;
+  description?: string | null;
+  source: "chat" | "wizard" | "system";
+  items?: Array<{
+    position: string;
+    description: string;
+    quantity: string;
+    unit: string;
+    ep: string;
+    gp: string;
+  }>;
+};
+
+// ---- Eingabe-Historie (links) ----
+type InputEntry = { id: string; text: string; ts: number };
+
+const KalkulaiInterface = () => {
+  const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
+  const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
+  const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
+  const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+
+  const [inputText, setInputText] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isMakingPdf, setIsMakingPdf] = useState(false);
+
+  // Angebotspositionen (final-relevant: PDF, Preise)
+  const [positions, setPositions] = useState<
+    Array<{ nr: number; name: string; menge: number; einheit: string; epreis: number; gesamtpreis?: number }>
+  >([]);
+
+  // Rechte Output-Box (Chat/Wizard/System)
+  const [sections, setSections] = useState<UiSection[]>([]);
+
+  // Revenue Guard + Wizard-Kontext
+  const [guard, setGuard] = useState<RevenueGuardResponse | null>(null);
+  const [wizardCtx, setWizardCtx] = useState<any>(null);
+
+  const profileCategories = [
+    {
+      title: "Persönliche Daten",
+      description: "Kontaktdaten, Unternehmenszuordnung und Rechnungsanschrift pflegen.",
+    },
+    {
+      title: "Team & Rollen",
+      description: "Kolleg:innen einladen und Verantwortlichkeiten im Projekt festlegen.",
+    },
+    {
+      title: "Zugangsdaten",
+      description: "E-Mail, Passwort und Zwei-Faktor-Authentifizierung verwalten.",
+    },
+  ];
+
+  const settingsCategories = [
+    {
+      title: "Allgemeine Einstellungen",
+      description: "Standardsprache, Zeitzone und Darstellung der Oberfläche anpassen.",
+    },
+    {
+      title: "Benachrichtigungen",
+      description: "E-Mail-, In-App- und Team-Updates gezielt konfigurieren.",
+    },
+    {
+      title: "Abrechnung & Pläne",
+      description: "Tarifübersicht, Rechnungsarchiv und Zahlungsmethoden einsehen.",
+    },
+  ];
+
+  // ---- Linke Historie + Autoscroll ----
+  const [inputs, setInputs] = useState<InputEntry[]>([]);
+  const leftScrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    leftScrollRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [inputs]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const minHeight = 44;
+    const maxHeight = 320;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [inputText]);
+
+  // ---- Backend-Reset beim Mount + lokaler Reset ----
+  useEffect(() => {
+    (async () => {
+      try {
+        await api.reset(); // leert Chat-Memory & Wizard-Sessions im Backend
+      } catch (e) {
+        // optional: System-Hinweis rechts anzeigen
+        setSections((prev) => [
+          ...prev,
+          {
+            id: String(Date.now() + Math.random()),
+            ts: Date.now(),
+            title: "Hinweis",
+            subtitle: "Server-Reset",
+            description: "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.",
+            source: "system",
+          },
+        ]);
+      } finally {
+        // lokalen Zustand auch leeren
+        setPositions([]);
+        setSections([]);
+        setGuard(null);
+        setInputs([]);
+        setInputText("");
+      }
+    })();
+  }, []);
+
+  // Helper: Section bauen (mit id/ts)
+  const mkSection = (s: Omit<UiSection, "id" | "ts">): UiSection => ({
+    id: String(Date.now() + Math.random()),
+    ts: Date.now(),
+    ...s,
+  });
+
+  const handleSend = async () => {
+    const text = inputText.trim();
+    if (!text || isLoading) return;
+    setInputs((prev) => [...prev, { id: crypto.randomUUID(), text, ts: Date.now() }]);
+    setInputText("");
+    textareaRef.current?.focus();
+    setSections([]);
+
+    setIsLoading(true);
+    try {
+      const chat = await api.chat(text);
+      const replyText =
+        typeof chat?.reply === "string"
+          ? chat.reply
+          : (chat?.reply as any)?.message
+          ? String((chat.reply as any).message)
+          : JSON.stringify(chat?.reply ?? chat ?? "", null, 2);
+
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Chat-Antwort",
+          subtitle: "Erste Analyse",
+          description: replyText,
+          source: "chat",
+        }),
+      ]);
+  
+      // NEU: auch Nutzer-Text auf Bestätigung prüfen
+      const textLower = text.toLowerCase();
+      const userLooksConfirmed = /(passen\s*so|stimmen\s*so|best[aä]tig|freigeben|erstelle\s+(?:das\s+)?angebot)/i.test(textLower);
+      const replyLooksConfirmed = /status\s*:\s*best(ae|ä)tigt/i.test(replyText) ||
+        /angebot wird (jetzt )?erstellt/i.test(replyText) ||
+        /mengen übernommen/i.test(replyText);
+  
+      if (chat?.ready_for_offer || userLooksConfirmed || replyLooksConfirmed) {
+        try {
+          const offer = await api.offerFromChat();
+          if (offer?.positions?.length) {
+            setPositions(offer.positions);
+            setSections((prev) => [
+              ...prev,
+              mkSection({
+                title: "Bestätigung erhalten",
+                subtitle: "Angebot erzeugt",
+                description: `Es wurden **${offer.positions.length} Positionen** übernommen. Du kannst jetzt das PDF erstellen.`,
+                source: "system",
+              }),
+            ]);
+            await runRevenueGuard();
+          } else {
+            setSections((prev) => [
+              ...prev,
+              mkSection({
+                title: "Hinweis",
+                subtitle: "Keine Positionen erkannt",
+                description:
+                  "Die Bestätigung wurde erkannt, aber es konnten keine Katalogpositionen gemappt werden. Bitte formuliere die Produkte konkreter (z. B. „Dispersionsfarbe, 10 L“, „Tiefgrund, 10 L“, „Abdeckfolie 4×5 m“).",
+                source: "system",
+              }),
+            ]);
+          }
+        } catch (e: any) {
+          setSections((prev) => [
+            ...prev,
+            mkSection({
+              title: "Fehler",
+              subtitle: "Angebotserstellung",
+              description: String(e?.message ?? "Unbekannter Fehler bei /api/offer"),
+              source: "system",
+            }),
+          ]);
+        }
+      }
+    } catch (e: any) {
+      const err = String(e?.message ?? "Unbekannter Fehler");
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Fehler",
+          subtitle: "Chat fehlgeschlagen",
+          description: err,
+          source: "system",
+        }),
+      ]);
+    } finally {
+      setIsLoading(false);
+      setInputText("");
+    }
+  };
+  
+
+
+  // ---------- PDF (nur wenn positions vorhanden) ----------
+  const handleMakePdf = async () => {
+    if (isMakingPdf) return;
+    if (positions.length === 0) {
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Hinweis",
+          subtitle: "PDF nicht möglich",
+          description: "Es sind noch keine Positionen vorhanden. Bitte zuerst über Chat oder Wizard Positionen ermitteln.",
+          source: "system",
+        }),
+      ]);
+      return;
+    }
+
+    setIsMakingPdf(true);
+    try {
+      const res = await api.pdf({
+        positions,
+        kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
+      });
+
+      const fullUrl = `${import.meta.env.VITE_API_BASE}${res.pdf_url}`;
+      await forceDownload(fullUrl, "Angebot.pdf");
+    } catch (e: any) {
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Fehler",
+          subtitle: "PDF fehlgeschlagen",
+          description: String(e?.message ?? "Unbekannter Fehler"),
+          source: "system",
+        }),
+      ]);
+    } finally {
+      setIsMakingPdf(false);
+    }
+  };
+
+  async function forceDownload(url: string, filename = "Angebot.pdf") {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`Download fehlgeschlagen (HTTP ${r.status})`);
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  }
+
+  // ---------- Wizard: Progress (Live-Vorschau nur rechts) ----------
+  const handleWizardProgress = (res: WizardStepResponse) => {
+    setWizardCtx(res?.context_partial || null);
+
+    const suggs = Array.isArray(res?.suggestions) ? res.suggestions : [];
+    if (suggs.length === 0) {
+      setSections((prev) => prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau")));
+      return;
+    }
+
+    const previewMd = suggs
+      .map((p) => {
+        const qty = typeof p.menge === "number" && !Number.isNaN(p.menge) ? p.menge : 0;
+        const unit = p.einheit ?? "";
+        const extra = p.text ? `\n  - ${p.text}` : "";
+        return `- **${p.name}** – ${qty} ${unit}${extra}`;
+      })
+      .join("\n");
+
+    setSections((prev) => {
+      const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
+      return [
+        ...withoutLive,
+        mkSection({
+          title: "Live-Vorschau",
+          subtitle: "Mengen & Materialien (ohne Preise)",
+          description: previewMd,
+          source: "wizard",
+        }),
+      ];
+    });
+  };
+
+  // ---------- Wizard: Finalize ----------
+  const handleWizardFinalize = async (wz: WizardFinalizeResult) => {
+    const matLines = wz.positions
+      .map((p) => `- name=${p.name}, menge=${Number(p.menge)}, einheit=${p.einheit}`)
+      .join("\n");
+
+    const syntheticMessage =
+      `Projektassistent Wizard abgeschlossen.\n` +
+      `Zusammenfassung: ${wz.summary}\n` +
+      `---\n` +
+      `status: bestätigt\n` +
+      `materialien:\n${matLines}\n` +
+      `---`;
+
+    try {
+      await api.chat(syntheticMessage);
+    } catch {
+      /* soft fail ok */
+    }
+
+    let mappedPositions: Array<{ nr: number; name: string; menge: number; einheit: string; epreis: number; gesamtpreis?: number }> = [];
+    try {
+      const names = wz.positions.map((p) => p.name).filter(Boolean);
+      if (names.length) {
+        const offer = await api.offerFromList(names);
+        if (offer?.positions?.length) mappedPositions = offer.positions;
+      }
+    } catch {
+      /* noop */
+    }
+
+    if (!mappedPositions.length) {
+      mappedPositions = wz.positions.map((p) => ({
+        nr: p.nr,
+        name: p.name,
+        menge: Number(p.menge) || 0,
+        einheit: p.einheit,
+        epreis: 0,
+      }));
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Hinweis",
+          subtitle: "Automatische Katalog-Zuordnung",
+          description:
+            "Konnte nicht alle Positionen automatisch zuordnen. Du kannst trotzdem ein PDF erzeugen; Preise sind zunächst 0.",
+          source: "system",
+        }),
+      ]);
+    }
+
+    setPositions(mappedPositions);
+
+    setSections((prev) => {
+      const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
+      return [
+        ...withoutLive,
+        mkSection({
+          title: "Wizard abgeschlossen",
+          subtitle: "Zusammenfassung",
+          description: `**${wz.summary}**\n\nEs wurden ${wz.positions.length} Materialpositionen vorbereitet.`,
+          source: "wizard",
+        }),
+      ];
+    });
+
+    await runRevenueGuard(wizardCtx);
+    setLeftMode("chat");
+  };
+
+  // ---------- Revenue Guard ----------
+  async function runRevenueGuard(optionalCtx?: any) {
+    if (!positions.length) {
+      setGuard(null);
+      return;
+    }
+    try {
+      const resp = await api.revenueGuardCheck({
+        positions: positions.map((p) => ({
+          nr: p.nr,
+          name: p.name,
+          menge: p.menge,
+          einheit: p.einheit,
+          epreis: p.epreis,
+        })),
+        context: optionalCtx || wizardCtx || {},
+      });
+      setGuard(resp);
+    } catch {
+      setGuard(null);
+    }
+  }
+
+  async function addSuggestion(sug: RevenueGuardSuggestion) {
+    let mapped = null as any;
+    try {
+      const offer = await api.offerFromList([sug.name]);
+      if (offer?.positions?.[0]) mapped = offer.positions[0];
+    } catch {
+      /* noop */
+    }
+
+    const newPos =
+      mapped ??
+      ({
+        nr: positions.length + 1,
+        name: sug.name,
+        menge: Number(sug.menge) || 0,
+        einheit: sug.einheit || "",
+        epreis: 0,
+      } as const);
+
+    setPositions((prev) => [...prev, newPos]);
+    // Nach Hinzufügen direkt erneut prüfen
+    await runRevenueGuard();
+  }
+
+  const chatSection = sections.find((s) => s.source === "chat");
+  const supportingSections = sections.filter((s) => s.source !== "chat");
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
+        <div className="max-w-[1440px] mx-auto">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <img
+                src="/lovable-uploads/c512bb54-21ad-4d03-a77e-daa5f6a25264.png"
+                alt="KalkulAI Logo"
+                className="h-16 w-auto"
+              />
+            </div>
+            <div className="flex items-center gap-8">
+              <button
+                onClick={() => setActiveNav("erstellen")}
+                className={`text-sm font-medium transition-colors ${
+                  activeNav === "erstellen" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Erstellen
+              </button>
+              <button
+                onClick={() => setActiveNav("bibliothek")}
+                className={`text-sm font-medium transition-colors ${
+                  activeNav === "bibliothek" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Bibliothek
+              </button>
+
+              {/* Chat <-> Wizard Umschalter */}
+              <div className="ml-6 flex items-center gap-2">
+                <button
+                  onClick={() => setLeftMode("chat")}
+                  className={`text-sm px-3 py-1 rounded-full ${
+                    leftMode === "chat"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  }`}
+                >
+                  Chat
+                </button>
+                <button
+                  onClick={() => setLeftMode("wizard")}
+                  className={`text-sm px-3 py-1 rounded-full ${
+                    leftMode === "wizard"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  }`}
+                >
+                  Wizard
+                </button>
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    <UserCircle className="h-5 w-5" />
+                    <span className="hidden sm:inline">Profil</span>
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem
+                    onSelect={() => setIsProfileDialogOpen(true)}
+                  >
+                    <User className="mr-2 h-4 w-4" />
+                    <span>Mein Profil</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setIsSettingsDialogOpen(true)}
+                  >
+                    <Settings className="mr-2 h-4 w-4" />
+                    <span>Einstellungen</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          {/* Tab Toggle */}
+          <div className="flex items-center justify-center gap-2">
+            <button
+              onClick={() => setActiveTab("angebot")}
+              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                activeTab === "angebot" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              Angebot
+            </button>
+            <button
+              onClick={() => setActiveTab("rechnung")}
+              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                activeTab === "rechnung" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              Rechnung
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main */}
+      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Left */}
+          <div className="space-y-4">
+            <Card className={`relative p-6 lg:p-8 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
+              {leftMode === "chat" ? (
+                <>
+                  {/* Historie deiner Eingaben */}
+                  <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+                    {inputs.map((m) => (
+                      <div key={m.id} className="flex justify-end">
+                        <div className="max-w-[80%] rounded-2xl px-4 py-2 text-base shadow-sm bg-primary text-primary-foreground">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {m.text}
+                          </ReactMarkdown>
+                          <div className="text-[10px] opacity-70 mt-1 text-right">
+                            {new Date(m.ts).toLocaleTimeString()}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={leftScrollRef} />
+                  </div>
+
+                  {/* Composer */}
+                  <div className="mt-3 border rounded-xl p-3 bg-background/80 min-h-[60px] shadow-inner">
+                    <textarea
+                      ref={textareaRef}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }}
+                      placeholder="Nachricht eingeben um einen Angebotsvorschlag zu erhalten"
+                      className="w-full min-h-[44px] resize-none border-none outline-none text-base leading-6 placeholder:text-muted-foreground bg-transparent p-0"
+                      rows={1}
+                    />
+                    <div className="flex items-center justify-between pt-2">
+                      <div className="flex items-center gap-1.5">
+                        <Button size="icon" variant="ghost" className="h-8 w-8">
+                          <MessageSquare className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8">
+                          <Mic className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8">
+                          <Camera className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <Button onClick={handleSend} disabled={isLoading || !inputText.trim()} className="h-9 px-3 rounded-full">
+                        <ArrowUp className="w-4 h-4 mr-1" />
+                        Senden
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="max-w-xl mx-auto flex-1">
+                  <WizardMaler onFinalize={handleWizardFinalize} onProgress={handleWizardProgress} />
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {/* Right */}
+          <div className="space-y-4">
+            <Card className={`p-7 lg:p-9 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
+              {/* Kopf */}
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
+                  <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={isMakingPdf || positions.length === 0}
+                  onClick={handleMakePdf}
+                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                </Button>
+              </div>
+
+              {/* Scrollbarer Content-Bereich */}
+              <div className="flex-1 overflow-y-auto">
+                {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                      <p className="text-muted-foreground">Analysiere Eingabe…</p>
+                    </div>
+                  </div>
+                ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) ? (
+                  <div className="space-y-6">
+                    {/* Revenue Guard Block */}
+                    {guard && guard.missing.length > 0 && (
+                      <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="font-semibold text-blue-900">Vergessene Posten (Wächter)</h3>
+                          <span className="text-xs text-blue-700">{guard.missing.length} Vorschlag/Vorschläge</span>
+                        </div>
+                        <ul className="space-y-2">
+                          {guard.missing.map((m) => (
+                            <li key={m.id} className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-medium">
+                                  {m.name}{" "}
+                                  <span className="text-xs text-muted-foreground">({m.category})</span>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {m.menge ?? "—"} {m.einheit ?? ""} &middot; {m.reason}
+                                </div>
+                              </div>
+                              <Button size="sm" variant="outline" onClick={() => addSuggestion(m)}>
+                                Übernehmen
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {chatSection && (
+                      <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
+                        <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
+                        {chatSection.subtitle && (
+                          <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
+                        )}
+                        {chatSection.description && (
+                          <div className="prose prose-base md:prose-lg max-w-none text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {String(chatSection.description)}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {supportingSections.map((section) => (
+                      <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
+                          <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
+                        </div>
+                        {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
+                        {section.description && (
+                          <div className="prose prose-sm max-w-none text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {String(section.description)}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-base text-muted-foreground text-center">
+                      Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer (rechts) */}
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="flex gap-3 justify-center">
+                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
+                    <Edit className="w-4 h-4 mr-2" />
+                    Bearbeiten
+                  </Button>
+                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
+                    <Save className="w-4 h-4 mr-2" />
+                    Speichern
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </main>
+
+      {/* Dialogs */}
+      <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
+        <DialogContent className="max-w-xl space-y-6">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>Mein Profil</DialogTitle>
+            <DialogDescription>
+              Passe deine persönlichen Angaben an und bereite dein Team auf kommende Projekte vor.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {profileCategories.map((category) => (
+              <div
+                key={category.title}
+                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
+              >
+                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              Mehr Funktionen folgen im nächsten Release.
+            </span>
+            <Button variant="outline" onClick={() => setIsProfileDialogOpen(false)}>
+              Schließen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
+        <DialogContent className="max-w-xl space-y-6">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>Einstellungen</DialogTitle>
+            <DialogDescription>
+              Richte KalkulAI nach deinen Arbeitsabläufen aus und verwalte deine Präferenzen zentral.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {settingsCategories.map((category) => (
+              <div
+                key={category.title}
+                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
+              >
+                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              Hier kannst du bald feingranulare Regeln hinterlegen.
+            </span>
+            <Button variant="outline" onClick={() => setIsSettingsDialogOpen(false)}>
+              Schließen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+export default KalkulaiInterface;
