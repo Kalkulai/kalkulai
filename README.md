@@ -50,7 +50,7 @@ npm run dev
 1. **Hugging Face Space (backend)** – pushes to `main` touching `backend/**` or the workflow file trigger the Space upload via `backend-deploy-hf.yml`. Requires `HF_TOKEN` and `HF_SPACE_ID` repository secrets.
 2. **Cloudflare Pages (frontend)** – PR validation runs build CI; pushes to `main` deploy using `frontend-deploy-cf.yml`. Requires `CF_API_TOKEN`, `CF_ACCOUNT_ID`, and `CF_PROJECT_NAME` secrets.
 3. **Smoke Tests** – `smoke-tests.yml` runs backend pytest smoke checks and the frontend build/test on every PR and on pushes to `main`.
-4. **Main branch guard** – `block-direct-main.yml` intentionally fails if someone pushes directly to `main` (except PR merges or approved bots), nudging contributors to go through pull requests.
+4. **Main branch guard** – `block-direct-main.yml` rewinds `main` to the previous commit when someone pushes directly (außer PR-Merges/Bots) und markiert den Workflow als fehlgeschlagen. Direkte Pushes gehen dadurch sofort verloren – nutzt bitte PRs.
 
 ## Local-development tips
 - When running both services locally, start the backend first so the frontend can reach it at `http://localhost:8000`.
