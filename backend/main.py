@@ -40,6 +40,19 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
 
+_DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://Kalkuali-kalkulai-frontend.hf.space",
+]
+_origins_env = os.getenv("FRONTEND_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [origin.strip() for origin in _origins_env.split(",") if origin.strip()]
+    if _origins_env.strip()
+    else _DEFAULT_ALLOWED_ORIGINS
+)
+ALLOWED_ORIGIN_REGEX = os.getenv("FRONTEND_ORIGIN_REGEX", "").strip() or None
+
 if not SKIP_LLM_SETUP:
     from app.llm import create_chat_llm, build_chains  # type: ignore
 else:  # pragma: no cover - placeholder for smoke tests
@@ -205,7 +218,8 @@ Kontext:
 app = FastAPI(title="Kalkulai Backend")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://Kalkuali-kalkulai-frontend.hf.space"],  # Frontend-URL hier
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -231,6 +245,9 @@ def _startup():
     print(f"   Produktdatei: {'OK' if PRODUCT_FILE.exists() else 'FEHLT'}")
     print(f"   CHROMA_DIR={CHROMA_DIR}  (writable)")
     print(f"   OUTPUT_DIR={OUTPUT_DIR}  (writable)")
+    print(f"   ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
+    if ALLOWED_ORIGIN_REGEX:
+        print(f"   ALLOWED_ORIGIN_REGEX={ALLOWED_ORIGIN_REGEX}")
 
 # ---- NEU: Reset-Endpoints (Memory & Wizard) ----
 @app.post("/api/session/reset")
