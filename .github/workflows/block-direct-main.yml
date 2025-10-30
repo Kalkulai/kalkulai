@@ -1,0 +1,19 @@
+name: Block Direct Pushes to Main
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow PR merges or bots
+        if: github.event.pusher.name == 'GitHub' || github.actor == 'dependabot[bot]' || github.actor == 'github-actions[bot]'
+        run: echo "Merge commit or bot push detected – allowed."
+
+      - name: Prevent direct pushes
+        if: !(github.event.pusher.name == 'GitHub' || github.actor == 'dependabot[bot]' || github.actor == 'github-actions[bot]')
+        run: |
+          echo "::error ::Direct pushes to main are blocked. Open a pull request instead."
+          exit 1
