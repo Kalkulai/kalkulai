@@ -1,19 +1,39 @@
-name: Block Direct Pushes to Main
+name: Guard Main Branch
 
 on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
-  guard:
+  revert-direct-push:
+    if: github.event.pusher.name != 'GitHub' && github.actor != 'dependabot[bot]' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Allow PR merges or bots
-        if: github.event.pusher.name == 'GitHub' || github.actor == 'dependabot[bot]' || github.actor == 'github-actions[bot]'
-        run: echo "Merge commit or bot push detected – allowed."
-
-      - name: Prevent direct pushes
-        if: !(github.event.pusher.name == 'GitHub' || github.actor == 'dependabot[bot]' || github.actor == 'github-actions[bot]')
+      - name: Check previous commit
+        env:
+          PREV_SHA: ${{ github.event.before }}
         run: |
-          echo "::error ::Direct pushes to main are blocked. Open a pull request instead."
+          if [[ "$PREV_SHA" == "" || "$PREV_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "::error ::Cannot determine previous commit to restore. Please revert manually."
+            exit 1
+          fi
+
+      - name: Restore main to previous commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Force reset remote main
+        env:
+          PREV_SHA: ${{ github.event.before }}
+        run: |
+          git fetch origin main --depth=1
+          git push origin "$PREV_SHA:refs/heads/main" --force
+
+      - name: Fail workflow (direct push blocked)
+        run: |
+          echo "::error ::Direct pushes to main are reverted automatically. Bitte arbeite über Pull Requests."
           exit 1
