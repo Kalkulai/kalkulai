@@ -6,10 +6,16 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   revert-direct-push:
-    if: github.event.pusher.name != 'GitHub' && github.actor != 'dependabot[bot]' && github.actor != 'github-actions[bot]'
+    if: >
+      github.event.head_commit != null
+      && github.event.pusher.name != 'GitHub'
+      && github.actor != 'dependabot[bot]'
+      && github.actor != 'github-actions[bot]'
+      && !contains(github.event.head_commit.message, 'Merge pull request')
     runs-on: ubuntu-latest
     steps:
       - name: Check previous commit
@@ -47,13 +53,17 @@ jobs:
               'Der Guard-Workflow hat den Push auf `main` automatisch rückgängig gemacht.',
               'Bitte arbeite künftig über Pull Requests.'
             ].join('\n');
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              body: issueBody,
-              labels: ['direct-push-blocked']
-            });
+            try {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body: issueBody,
+                labels: ['direct-push-blocked']
+              });
+            } catch (error) {
+              core.warning(`Konnte Issue nicht erstellen: ${error.message}`);
+            }
 
       - name: Fail workflow (direct push blocked)
         run: |
