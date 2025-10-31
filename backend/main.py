@@ -22,6 +22,12 @@ from app.utils import extract_products_from_output, parse_positions, extract_jso
 # ---------- Pfade & ENV ----------
 BASE_DIR = Path(__file__).parent
 
+try:  # bevorzugt lokale .env lesen, auch wenn uvicorn sie nicht lädt
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
 DATA_ROOT  = Path(os.getenv("DATA_ROOT", str(BASE_DIR)))
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
@@ -35,7 +41,7 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 MODEL_PROVIDER  = os.getenv("MODEL_PROVIDER", "openai").lower()        
 MODEL_LLM1      = os.getenv("MODEL_LLM1", "gpt-4o-mini")
 MODEL_LLM2      = os.getenv("MODEL_LLM2", "gpt-4o-mini")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY  = (os.getenv("OPENAI_API_KEY") or "").strip() or None
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"

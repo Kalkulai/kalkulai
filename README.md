@@ -25,7 +25,7 @@ uvicorn main:app --reload
 Key environment variables (see `backend/.env.example` for the full list):
 - `MODEL_PROVIDER` – `openai` or `ollama`.
 - `OPENAI_API_KEY` / `OLLAMA_BASE_URL` – credentials or local base URL.
-- `FRONTEND_ORIGINS` – comma separated list of allowed origins for CORS (include your Cloudflare Pages domain).
+- `FRONTEND_ORIGINS` – comma separated list of allowed origins for CORS (include your Cloudflare Pages domain and `http://localhost:8080` for local Vite dev).
 - `SKIP_LLM_SETUP` – set to `1` to boot the API without hitting LLM providers (handy for smoke tests).
 
 Generated assets:
@@ -36,11 +36,11 @@ Generated assets:
 ```bash
 cd frontend
 npm ci
-cp .env.example .env.local  # set VITE_API_BASE to your backend URL
+cp .env.example .env.local  # for production builds set VITE_API_BASE to your backend URL
 npm run dev
 ```
 
-`VITE_API_BASE` should point to the backend origin (omit trailing slash). Leave it empty when running behind the same domain with a reverse proxy.
+`npm run dev` starts Vite on port 8080. During development the dev server proxies REST requests (`/api`, `/wizard`, `/revenue-guard`, `/outputs`) to `http://localhost:8000`, so you do not need to set `VITE_API_BASE` for local work. For staging/production builds point `VITE_API_BASE` to the deployed backend origin (omit trailing slash). You can override the proxy target, if required, via `VITE_DEV_BACKEND_ORIGIN`.
 
 ## Testing & linting
 - Backend: `python -m venv .venv && source .venv/bin/activate` then `pip install -r backend/requirements-dev.txt` and run `pytest backend/testing`.

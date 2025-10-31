@@ -8,6 +8,26 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    proxy: mode === "development"
+      ? {
+          "/api": {
+            target: process.env.VITE_DEV_BACKEND_ORIGIN ?? "http://localhost:8000",
+            changeOrigin: true,
+          },
+          "/wizard": {
+            target: process.env.VITE_DEV_BACKEND_ORIGIN ?? "http://localhost:8000",
+            changeOrigin: true,
+          },
+          "/revenue-guard": {
+            target: process.env.VITE_DEV_BACKEND_ORIGIN ?? "http://localhost:8000",
+            changeOrigin: true,
+          },
+          "/outputs": {
+            target: process.env.VITE_DEV_BACKEND_ORIGIN ?? "http://localhost:8000",
+            changeOrigin: true,
+          },
+        }
+      : undefined,
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
