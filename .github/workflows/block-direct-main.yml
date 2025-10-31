@@ -33,6 +33,28 @@ jobs:
           git fetch origin main --depth=1
           git push origin "$PREV_SHA:refs/heads/main" --force
 
+      - name: Create warning issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const head = context.payload.head_commit || {};
+            const title = `Direkter Push von ${context.actor} wurde zurückgesetzt`;
+            const issueBody = [
+              `**Commit:** ${head.id || 'unbekannt'}`,
+              `**Autor:** ${head.author?.name || context.actor}`,
+              `**Commit Message:** ${head.message || '—'}`,
+              '',
+              'Der Guard-Workflow hat den Push auf `main` automatisch rückgängig gemacht.',
+              'Bitte arbeite künftig über Pull Requests.'
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: issueBody,
+              labels: ['direct-push-blocked']
+            });
+
       - name: Fail workflow (direct push blocked)
         run: |
           echo "::error ::Direct pushes to main are reverted automatically. Bitte arbeite über Pull Requests."
