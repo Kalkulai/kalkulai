@@ -1,0 +1,45 @@
+thin:
+  # Synonyme / Normalisierung
+  - query: "Tiefgrund"
+    must_contain_name: "Haftgrund"         # unser Synonym-Mapping soll 'Haftgrund' abdecken
+  - query: "Malerkrepp"
+    must_contain_name: "Abklebeband"       # Synonym-Recall
+
+  # Rauschen / Schreibweisen
+  - query: "Bitte 1x Tiefgrund"
+    must_contain_name: "Haftgrund"
+  - query: "abdeck band"
+    must_contain_name: "Abklebeband"
+
+  # Komposita / Tokenisierung
+  - query: "Haftgrundierung"
+    must_contain_name: "Haftgrund"
+
+main:
+  # Basisfälle (bereits vorhanden)
+  - query: "Innenfarbe weiß"
+    ideal_sku: "dispersionsfarbe-wei-matt-10-l"
+  - query: "Tiefgrund 10 L"
+    ideal_sku: "tiefengrund-l-semittelfrei-10-l"
+
+  # Volumen-Varianten (Komma/ohne Leerzeichen)
+  - query: "Tiefgrund 10L"
+    ideal_sku: "tiefengrund-l-semittelfrei-10-l"
+  - query: "Tiefgrund 12,5 L"
+    ideal_sku: "tiefengrund-l-semittelfrei-10-l"   # wenn du auch 12,5 L im Katalog hast, setz diese SKU
+
+  # Familien-Trennung (Haftgrund ≠ Tiefengrund)
+  - query: "Haftgrund 2.5 L"
+    ideal_sku: "haftgrund-f-r-holz-2-5-l"          # passe auf deine tatsächliche Haftgrund-SKU an
+
+  # Putzgrund als valide Alternative innerhalb der Grund-Familie
+  - query: "Putzgrund 10 L"
+    ideal_sku: "putzgrund-f-r-fassaden-10-l"
+
+  # Rauschen in der Query (soll robust bleiben)
+  - query: "brauche schnell tiefgrund 10l für innen"
+    ideal_sku: "tiefengrund-l-semittelfrei-10-l"
+
+  # Exklusionen sollten greifen (Sperrgrund/Isoliergrund nicht toppen)
+  - query: "Tiefgrund 5 L"
+    ideal_sku: "tiefengrund-l-semittelfrei-10-l"    # falls du auch 5 L hast: passende 5L-SKU eintragen

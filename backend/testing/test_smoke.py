@@ -1,5 +1,8 @@
-import importlib
 import os
+
+os.environ.setdefault("ALLOW_ALL_ORIGINS", "1")
+
+import importlib
 import sys
 from pathlib import Path
 
@@ -18,7 +21,8 @@ def _load_app() -> TestClient:
     Import the FastAPI app with lightweight settings so LLM backends are skipped.
     Reloading ensures env overrides are respected for every test run.
     """
-    os.environ.setdefault("SKIP_LLM_SETUP", "1")
+    os.environ["SKIP_LLM_SETUP"] = "1"
+    os.environ["FORCE_RETRIEVER_BUILD"] = "0"
     os.environ.setdefault("FRONTEND_ORIGINS", "http://test.local")
     module = importlib.import_module("main")
     module = importlib.reload(module)

@@ -269,7 +269,8 @@ const KalkulaiInterface = () => {
         kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
       });
 
-      const fullUrl = `${import.meta.env.VITE_API_BASE}${res.pdf_url}`;
+      const base = api.base();
+      const fullUrl = /^https?:\/\//i.test(res.pdf_url) ? res.pdf_url : `${base}${res.pdf_url}`;
       await forceDownload(fullUrl, "Angebot.pdf");
     } catch (e: any) {
       setSections((prev) => [

@@ -64,6 +64,25 @@ export type PdfRequestPayload = {
 };
 export type PdfResponse = { pdf_url: string; context: any };
 
+// Catalog
+export type CatalogSearchResult = {
+  sku: string | null;
+  name: string | null;
+  unit: string | null;
+  pack_sizes: string | null;
+  synonyms: string[];
+  category: string | null;
+  brand: string | null;
+  confidence: number | null;
+};
+export type CatalogSearchResponse = {
+  query: string;
+  limit: number;
+  count: number;
+  results: CatalogSearchResult[];
+  took_ms: number;
+};
+
 // Wizard
 export type WizardUISchema = {
   type: "singleSelect" | "multiSelect" | "number" | "info";
@@ -159,6 +178,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  // Catalog search (thin retrieval)
+  catalogSearch: (query: string, topK = 5) =>
+    jsonFetch<CatalogSearchResponse>(
+      `/api/catalog/search?q=${encodeURIComponent(query)}&top_k=${encodeURIComponent(
+        Math.max(1, topK),
+      )}`,
+      { method: "GET" },
+    ),
 
   // --- Wizard Endpoints ---
   wizardNext: (sessionId?: string, answers?: Record<string, any>) =>

@@ -1,13 +1,18 @@
 # main.py
 from __future__ import annotations
 
+import logging
 import os
 import re
 import math
+import time
+from difflib import SequenceMatcher
 from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Body, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,9 +20,24 @@ from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # Lokale Module
-from app.db import load_products_file, build_vector_db
-from app.utils import extract_products_from_output, parse_positions, extract_json_array
+try:
+    from app.db import load_products_file, build_vector_db
+    from app.utils import extract_products_from_output, parse_positions, extract_json_array
+    from app.uom_convert import harmonize_material_line
+except ModuleNotFoundError:  # pragma: no cover - relative fallback for CLI tools
+    from backend.app.db import load_products_file, build_vector_db
+    from backend.app.utils import extract_products_from_output, parse_positions, extract_json_array
+    from backend.app.uom_convert import harmonize_material_line
+from backend.shared.normalize.text import normalize_query as shared_normalize_query
+from backend.shared.normalize.text import tokenize as shared_tokenize
+from backend.retriever.thin import search_catalog_thin
+from backend.retriever.main import rank_main
 
+
+# ---------- Logging ----------
+logger = logging.getLogger("kalkulai")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 # ---------- Pfade & ENV ----------
 BASE_DIR = Path(__file__).parent
@@ -33,6 +53,7 @@ DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
 TEMPLATES  = BASE_DIR / "templates"
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", str(DATA_ROOT / "outputs")))
+SYNONYMS_PATH = BASE_DIR / "shared" / "normalize" / "synonyms.yaml"
 
 CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,6 +66,24 @@ OPENAI_API_KEY  = (os.getenv("OPENAI_API_KEY") or "").strip() or None
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
+LLM1_THIN_RETRIEVAL = os.getenv("LLM1_THIN_RETRIEVAL", "0") == "1"
+CATALOG_TOP_K       = max(1, int(os.getenv("CATALOG_TOP_K", "5")))
+CATALOG_CACHE_TTL   = max(5, int(os.getenv("CATALOG_CACHE_TTL", "60")))
+CATALOG_QUERIES_PER_TURN = max(1, int(os.getenv("CATALOG_QUERIES_PER_TURN", "2")))
+
+LLM1_MODE = (os.getenv("LLM1_MODE", "assistive") or "assistive").strip().lower()
+ADOPT_THRESHOLD = float(os.getenv("ADOPT_THRESHOLD", "0.82"))
+BUSINESS_SCORING = [
+    flag.strip()
+    for flag in (os.getenv("BUSINESS_SCORING", "margin,availability") or "").split(",")
+    if flag.strip()
+]
+logger.info(
+    "Flags: LLM1_MODE=%s ADOPT_THRESHOLD=%.2f BUSINESS_SCORING=%s",
+    LLM1_MODE,
+    ADOPT_THRESHOLD,
+    BUSINESS_SCORING,
+)
 
 _DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -59,9 +98,14 @@ ALLOWED_ORIGINS = (
 )
 ALLOWED_ORIGIN_REGEX = os.getenv("FRONTEND_ORIGIN_REGEX", "").strip() or None
 
+FORCE_RETRIEVER_BUILD = os.getenv("FORCE_RETRIEVER_BUILD", "0") == "1"
+
 if not SKIP_LLM_SETUP:
-    from app.llm import create_chat_llm, build_chains  # type: ignore
-else:  # pragma: no cover - placeholder for smoke tests
+    try:
+        from app.llm import create_chat_llm, build_chains  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover
+        from backend.app.llm import create_chat_llm, build_chains  # type: ignore
+else:  # pragma: no cover
     create_chat_llm = build_chains = None  # type: ignore
 
 # ---------- Jinja2-Env (Filter) ----------
@@ -84,13 +128,236 @@ def _date_format(value: str, fmt: str = "%d.%m.%Y") -> str:
 env.filters["date_format"] = _date_format
 
 # ---------- Daten + Vektor-DB ----------
-PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
+_product_file_env = os.getenv("PRODUCT_FILE", "").strip()
+if _product_file_env:
+    candidate = Path(_product_file_env)
+    if not candidate.is_absolute():
+        candidate = DATA_DIR / candidate
+    PRODUCT_FILE = candidate
+else:
+    maler_default = DATA_DIR / "maler_lackierer_produkte.txt"
+    if maler_default.exists():
+        PRODUCT_FILE = maler_default
+    else:
+        PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
-if SKIP_LLM_SETUP:
+if SKIP_LLM_SETUP and not FORCE_RETRIEVER_BUILD:
     DB = None
     RETRIEVER = None
 else:
     DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
+
+def _sku_from_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or f"produkt-{abs(hash(name))}"
+
+def _document_to_catalog_entry(doc) -> Dict[str, Any]:
+    text = (getattr(doc, "page_content", "") or "").strip()
+    lines = text.splitlines()
+    fallback_name = ""
+    if lines:
+        first = lines[0]
+        fallback_name = first.replace("Produkt:", "", 1).strip()
+
+    meta = getattr(doc, "metadata", None) or {}
+    name = meta.get("name") or fallback_name
+    if name:
+        sku = meta.get("sku") or _sku_from_name(name)
+    else:
+        sku = meta.get("sku") or _sku_from_name(text)
+    entry = {
+        "sku": sku,
+        "name": name,
+        "unit": meta.get("unit"),
+        "pack_sizes": meta.get("pack_sizes"),
+        "synonyms": meta.get("synonyms") or [],
+        "category": meta.get("category"),
+        "brand": meta.get("brand"),
+        "description": meta.get("description"),
+        "raw": text,
+    }
+    return entry
+
+CATALOG_ITEMS: List[Dict[str, Any]] = [_document_to_catalog_entry(doc) for doc in DOCUMENTS]
+CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {
+    (item["name"] or "").lower(): item for item in CATALOG_ITEMS if item.get("name")
+}
+CATALOG_BY_SKU: Dict[str, Dict[str, Any]] = {
+    item["sku"]: item for item in CATALOG_ITEMS if item.get("sku")
+}
+CATALOG_TEXT_BY_NAME: Dict[str, str] = {
+    (item["name"] or "").lower(): item.get("raw", "") for item in CATALOG_ITEMS if item.get("name")
+}
+CATALOG_TEXT_BY_SKU: Dict[str, str] = {
+    item["sku"]: item.get("raw", "") for item in CATALOG_ITEMS if item.get("sku")
+}
+CATALOG_SEARCH_CACHE: Dict[Tuple[str, int], Tuple[float, List[Dict[str, Any]]]] = {}
+
+
+def _normalize_query(text: str) -> str:
+    """Backward compatible wrapper that delegates to shared normalize module."""
+    return shared_normalize_query(text)
+
+def _tokenize(text: str) -> set[str]:
+    """Wrapper to keep legacy call sites while using shared tokenizer."""
+    return set(shared_tokenize(text))
+
+
+def _catalog_cache_key(query: str, limit: int) -> Tuple[str, int]:
+    return (_normalize_query(query), limit)
+
+
+def _score_entry(query: str, entry: Dict[str, Any]) -> float:
+    q = _normalize_query(query)
+    if not q:
+        return 0.0
+    name_raw = (entry.get("name") or "")
+    name = _normalize_query(name_raw)
+    if not name:
+        return 0.0
+    if q == name:
+        return 1.0
+    if q in name:
+        # reward substring matches without forcing perfect alignment
+        base = SequenceMatcher(None, q, name).ratio()
+        return max(base, 0.85)
+
+    q_tokens = _tokenize(q)
+    name_tokens = _tokenize(name)
+    overlap = len(q_tokens & name_tokens)
+    ratio = SequenceMatcher(None, q, name).ratio()
+    if overlap:
+        ratio = max(ratio, 0.6 + 0.1 * min(overlap, 3))
+    compact_q = q.replace(" ", "")
+    compact_name = name.replace(" ", "")
+    if compact_q and compact_name and compact_q in compact_name:
+        ratio = max(ratio, 0.82)
+
+    desc_raw = (entry.get("description") or "")
+    desc = _normalize_query(desc_raw)
+    if desc:
+        if q == desc:
+            ratio = max(ratio, 0.9)
+        if q in desc:
+            ratio = max(ratio, 0.8)
+        desc_tokens = _tokenize(desc)
+        overlap_desc = len(q_tokens & desc_tokens)
+        if overlap_desc:
+            ratio = max(ratio, 0.55 + 0.1 * min(overlap_desc, 3))
+        ratio = max(ratio, SequenceMatcher(None, q, desc).ratio())
+        compact_desc = desc.replace(" ", "")
+        if compact_q and compact_desc and compact_q in compact_desc:
+            ratio = max(ratio, 0.78)
+
+    for syn in entry.get("synonyms") or []:
+        s = _normalize_query(syn or "")
+        if not s:
+            continue
+        if q == s:
+            return 0.95
+        if q in s:
+            ratio = max(ratio, 0.85)
+        ratio = max(ratio, SequenceMatcher(None, q, s).ratio())
+
+    return ratio
+
+
+def _catalog_lookup(query: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    if RETRIEVER is None:
+        return []
+
+    top_k = min(limit or CATALOG_TOP_K, CATALOG_TOP_K)
+    key = _catalog_cache_key(query, top_k)
+    now = time.time()
+    cached = CATALOG_SEARCH_CACHE.get(key)
+    if cached and now - cached[0] <= CATALOG_CACHE_TTL:
+        return cached[1]
+
+    q_lower = _normalize_query(query)
+
+    # 1) Lexikalische Treffer anhand der vorhandenen Katalogdaten
+    lexical_candidates: List[Tuple[float, Dict[str, Any]]] = []
+    for item in CATALOG_ITEMS:
+        score = _score_entry(q_lower, item)
+        if score >= 0.55:
+            lexical_candidates.append((score, item))
+
+    lexical_candidates.sort(key=lambda tpl: tpl[0], reverse=True)
+    if lexical_candidates:
+        selected = lexical_candidates[:top_k]
+        results = [
+            {
+                "sku": item.get("sku"),
+                "name": item.get("name"),
+                "unit": item.get("unit"),
+                "pack_sizes": item.get("pack_sizes"),
+                "synonyms": item.get("synonyms") or [],
+                "category": item.get("category"),
+                "brand": item.get("brand"),
+                "confidence": round(score, 3),
+            }
+            for score, item in selected
+        ]
+        CATALOG_SEARCH_CACHE[key] = (now, results)
+        return results
+
+    # 2) Fallback Retriever mit Score-Filter
+    try:
+        docs = RETRIEVER.get_relevant_documents(query)[: max(top_k * 2, top_k)]
+    except Exception as exc:  # pragma: no cover - defensive
+        if DEBUG:
+            print(f"[WARN] Retrieval fehlgeschlagen für '{query}': {exc}")
+        return []
+
+    seen: set[str] = set()
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+
+    for doc in docs:
+        meta = getattr(doc, "metadata", None) or {}
+        name = meta.get("name")
+        sku = meta.get("sku")
+
+        entry: Optional[Dict[str, Any]] = None
+        if sku and sku in CATALOG_BY_SKU:
+            entry = CATALOG_BY_SKU[sku]
+        elif name and name.lower() in CATALOG_BY_NAME:
+            entry = CATALOG_BY_NAME[name.lower()]
+
+        if entry is None:
+            entry = _document_to_catalog_entry(doc)
+
+        key_seen = entry.get("sku") or entry.get("name") or str(entry)
+        if key_seen in seen:
+            continue
+
+        score = _score_entry(q_lower, entry)
+        if score < 0.45:
+            continue
+
+        seen.add(key_seen)
+        scored.append((score, entry))
+        if len(scored) >= top_k:
+            break
+
+    scored.sort(key=lambda tpl: tpl[0], reverse=True)
+    results = [
+        {
+            "sku": item.get("sku"),
+            "name": item.get("name"),
+            "unit": item.get("unit"),
+            "pack_sizes": item.get("pack_sizes"),
+            "synonyms": item.get("synonyms") or [],
+            "category": item.get("category"),
+            "brand": item.get("brand"),
+            "confidence": round(score, 3),
+        }
+        for score, item in scored[:top_k]
+    ]
+
+    CATALOG_SEARCH_CACHE[key] = (now, results)
+    return results
 
 # ---------- LLMs ----------
 llm1 = llm2 = None
@@ -221,15 +488,38 @@ Kontext:
     return merged[:limit]
 
 # ---------- FastAPI ----------
-app = FastAPI(title="Kalkulai Backend")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    print("✅ Startup")
+    print(f"   MODEL_PROVIDER={MODEL_PROVIDER}  LLM1={MODEL_LLM1}  LLM2={MODEL_LLM2}  VAT_RATE={VAT_RATE}")
+    print(f"   Produktdatei: {'OK' if PRODUCT_FILE.exists() else 'FEHLT'}")
+    print(f"   CHROMA_DIR={CHROMA_DIR}  (writable)")
+    print(f"   OUTPUT_DIR={OUTPUT_DIR}  (writable)")
+    print(f"   ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
+    if ALLOWED_ORIGIN_REGEX:
+        print(f"   ALLOWED_ORIGIN_REGEX={ALLOWED_ORIGIN_REGEX}")
+    yield
+
+
+app = FastAPI(title="Kalkulai Backend", lifespan=_lifespan)
+ALLOW_ALL_ORIGINS = os.getenv("ALLOW_ALL_ORIGINS", "0") == "1"
+cors_kwargs = dict(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if ALLOW_ALL_ORIGINS:
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], **cors_kwargs)
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_origin_regex=ALLOWED_ORIGIN_REGEX,
+        **cors_kwargs,
+    )
 
 # Statische Auslieferung der generierten PDFs (aus /app/outputs)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
@@ -243,17 +533,51 @@ def root():
 def api_health():
     return {"ok": True, "time": datetime.utcnow().isoformat()}
 
-# Startup-Log
-@app.on_event("startup")
-def _startup():
-    print("✅ Startup")
-    print(f"   MODEL_PROVIDER={MODEL_PROVIDER}  LLM1={MODEL_LLM1}  LLM2={MODEL_LLM2}  VAT_RATE={VAT_RATE}")
-    print(f"   Produktdatei: {'OK' if PRODUCT_FILE.exists() else 'FEHLT'}")
-    print(f"   CHROMA_DIR={CHROMA_DIR}  (writable)")
-    print(f"   OUTPUT_DIR={OUTPUT_DIR}  (writable)")
-    print(f"   ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
-    if ALLOWED_ORIGIN_REGEX:
-        print(f"   ALLOWED_ORIGIN_REGEX={ALLOWED_ORIGIN_REGEX}")
+@app.get("/api/catalog/search")
+def api_catalog_search(
+    q: str = Query(..., min_length=2, description="Freitext-Suche (Name, Synonym)"),
+    top_k: int = Query(5, ge=1, le=10, description="Anzahl der Treffer (maximal)"),
+):
+    if RETRIEVER is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Katalogsuche aktuell nicht verfügbar (Retriever nicht initialisiert).",
+        )
+    limit = min(top_k, CATALOG_TOP_K)
+    started = time.time()
+    try:
+        hits = search_catalog_thin(
+            query=q,
+            top_k=limit,
+            catalog_items=CATALOG_ITEMS,
+            synonyms_path=str(SYNONYMS_PATH),
+        )
+        results = [
+            {
+                "sku": h.get("sku"),
+                "name": h.get("name"),
+                "unit": h.get("unit"),
+                "pack_sizes": h.get("pack_sizes"),
+                "synonyms": h.get("synonyms", []),
+                "category": h.get("category"),
+                "brand": h.get("brand"),
+                "confidence": round(float(h.get("score_final", 0.0)), 3),
+            }
+            for h in hits
+        ]
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
+        results = _catalog_lookup(q, limit)
+
+    took = int((time.time() - started) * 1000)
+    logger.info("catalog.search q=%r limit=%d took_ms=%d count=%d", q, limit, took, len(results))
+    return {
+        "query": q,
+        "limit": limit,
+        "count": len(results),
+        "results": results,
+        "took_ms": took,
+    }
 
 # ---- NEU: Reset-Endpoints (Memory & Wizard) ----
 @app.post("/api/session/reset")
@@ -363,6 +687,203 @@ def _make_machine_block(status: str, items: list[dict]) -> str:
     lines = [f"- name={it['name']}, menge={it['menge']}, einheit={it['einheit']}" for it in items]
     return f"---\nstatus: {status}\nmaterialien:\n" + "\n".join(lines) + "\n---"
 
+
+CATALOG_BLOCK_RE = re.compile(r"---\s*status:\s*katalog\s*candidates:\s*(.*?)---", re.IGNORECASE | re.DOTALL)
+MACHINE_BLOCK_RE = re.compile(r"---\s*(?:projekt_id:.*?\n)?(?:version:.*?\n)?status:\s*([a-zäöüß]+)\s*materialien:\s*(.*?)---", re.IGNORECASE | re.DOTALL)
+
+def _build_catalog_candidates(items: List[dict]) -> List[Dict[str, Any]]:
+    if not LLM1_THIN_RETRIEVAL or not items:
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+    seen_queries: set[str] = set()
+    for item in items:
+        query = (item.get("name") or "").strip()
+        if not query:
+            continue
+        key = query.lower()
+        if key in seen_queries or len(seen_queries) >= CATALOG_QUERIES_PER_TURN:
+            continue
+        seen_queries.add(key)
+
+        try:
+            raw_hits = search_catalog_thin(
+                query=query,
+                top_k=CATALOG_TOP_K,
+                catalog_items=CATALOG_ITEMS,
+                synonyms_path=str(SYNONYMS_PATH),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("LLM1 thin retrieval failed for %s: %s", query, exc)
+            raw_hits = []
+
+        matches: List[Dict[str, Any]] = []
+        for hit in raw_hits:
+            score_final = float(hit.get("score_final", hit.get("confidence", 0.0)) or 0.0)
+            mapped = {
+                "sku": hit.get("sku"),
+                "name": hit.get("name"),
+                "unit": hit.get("unit"),
+                "pack_sizes": hit.get("pack_sizes"),
+                "synonyms": hit.get("synonyms", []),
+                "category": hit.get("category"),
+                "brand": hit.get("brand"),
+                "confidence": round(score_final, 3),
+                "score_final": score_final,
+                "hard_filters_passed": bool(hit.get("hard_filters_passed", True)),
+            }
+            matches.append(mapped)
+
+        best = matches[0] if matches else None
+        unit = best.get("unit") if best and best.get("unit") else item.get("einheit")
+        status = "matched" if best else "oov"
+        adoptable = False
+        selected_catalog_item_id: Optional[str] = None
+        selection_reason = ""
+
+        if best:
+            allowed = _adopt_candidate_allowed(query, best)
+            best_score = float(best.get("score_final", 0.0))
+            if LLM1_MODE == "strict":
+                if allowed:
+                    adoptable = True
+            elif LLM1_MODE == "merge":
+                if allowed and best_score >= ADOPT_THRESHOLD:
+                    adoptable = True
+                    selected_catalog_item_id = best.get("sku")
+                    selection_reason = "rule"
+                    status = "matched"
+                    if best.get("unit"):
+                        unit = best.get("unit")
+
+        candidates.append(
+            {
+                "query": query,
+                "canonical_name": best.get("name") if best else None,
+                "unit": _normalize_unit(unit) if unit else "",
+                "matched_sku": best.get("sku") if best else None,
+                "confidence": best.get("confidence") if best else None,
+                "status": status,
+                "oov": status != "matched",
+                "options": matches,
+                "adoptable": adoptable,
+                "selected_catalog_item_id": selected_catalog_item_id,
+                "selection_reason": selection_reason,
+            }
+        )
+    return candidates
+
+
+def _make_catalog_block(candidates: List[Dict[str, Any]]) -> str:
+    rows = []
+    for cand in candidates:
+        conf = cand.get("confidence")
+        conf_str = f"{float(conf):.3f}" if conf not in (None, "") else ""
+        parts = [
+            f"query={cand.get('query', '')}",
+            f"canonical={cand.get('canonical_name', '') or ''}",
+            f"unit={cand.get('unit', '') or ''}",
+            f"sku={cand.get('matched_sku', '') or ''}",
+            f"status={cand.get('status', '') or ''}",
+            f"oov={'1' if cand.get('oov') else '0'}",
+            f"confidence={conf_str}",
+        ]
+        if "adoptable" in cand:
+            parts.append(f"adoptable={'1' if cand.get('adoptable') else '0'}")
+        if "selected_catalog_item_id" in cand:
+            parts.append(f"selected={cand.get('selected_catalog_item_id') or ''}")
+        if "selection_reason" in cand:
+            parts.append(f"reason={cand.get('selection_reason') or ''}")
+        rows.append("- " + "; ".join(parts))
+    return "---\nstatus: katalog\ncandidates:\n" + "\n".join(rows) + "\n---"
+
+
+def _adopt_candidate_allowed(item_name: str, best: dict) -> bool:
+    """
+    Strict-Regel: Nur übernehmen, wenn
+    - hard_filters_passed (aus Thin-Retrieval Ergebnis) und
+    - der (normalisierte) Titel das Canonical-Token enthält.
+    """
+
+    try:
+        from backend.shared.normalize.text import tokenize  # local import to avoid cycles
+    except Exception:
+        return False
+
+    if not item_name:
+        return False
+    if not best.get("hard_filters_passed"):
+        return False
+    title = (best.get("name") or "").strip()
+    if not title:
+        return False
+    title_toks = set(tokenize(title))
+    item_toks = set(tokenize(item_name))
+    if not title_toks or not item_toks:
+        return False
+    return bool(item_toks & title_toks)
+
+
+def _extract_catalog_map(text: str) -> Dict[str, Dict[str, Any]]:
+    mapping: Dict[str, Dict[str, Any]] = {}
+    if not text:
+        return mapping
+    for block in CATALOG_BLOCK_RE.finditer(text):
+        body = block.group(1)
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-"):
+                continue
+            data: Dict[str, Any] = {}
+            for part in line.lstrip("- ").split(";"):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                key, value = part.split("=", 1)
+                data[key.strip()] = value.strip()
+            query = data.get("query")
+            if not query:
+                continue
+            mapping[query.lower()] = {
+                "canonical_name": data.get("canonical") or None,
+                "unit": data.get("unit") or None,
+                "matched_sku": data.get("sku") or None,
+                "status": data.get("status") or None,
+                "oov": data.get("oov") == "1",
+            }
+    return mapping
+
+
+def _extract_last_machine_items(history: str, prefer_status: Optional[str] = None) -> list[dict]:
+    if not history:
+        return []
+    blocks = []
+    for match in MACHINE_BLOCK_RE.finditer(history):
+        status = (match.group(1) or "").strip().lower()
+        body = match.group(2) or ""
+        items = []
+        for m in SUG_RE.finditer(body):
+            items.append({
+                "name": (m.group(1) or "").strip(),
+                "menge": float((m.group(2) or "0").replace(",", ".")),
+                "einheit": (m.group(3) or "").strip(),
+            })
+        blocks.append({"status": status, "items": items})
+
+    if not blocks:
+        return []
+
+    if prefer_status:
+        prefer = prefer_status.lower()
+        for block in reversed(blocks):
+            if block["status"] == prefer and block["items"]:
+                return block["items"]
+
+    for block in reversed(blocks):
+        if block["items"]:
+            return block["items"]
+    return []
+
 # ---- API: Chat (LLM1) ----
 @app.post("/api/chat")
 def api_chat(payload: Dict[str, str] = Body(...)):
@@ -380,10 +901,10 @@ def api_chat(payload: Dict[str, str] = Body(...)):
     # 2) Materials extrahieren – falls der Bot KEINEN Maschinenanhang schreibt,
     #    erzeugen wir einen aus "Materialbedarf" und legen ihn als AI-Message in die Memory.
     has_machine_block = ("status:" in reply_lower) and ("materialien:" in reply_lower) and ("- name=" in reply_lower)
+    materials_in_reply = _extract_materials_from_text_any(reply_text)
     if not has_machine_block:
-        items = _extract_materials_from_text_any(reply_text)
-        if items:
-            machine_block = _make_machine_block("schätzung", items)
+        if materials_in_reply:
+            machine_block = _make_machine_block("schätzung", materials_in_reply)
             try:
                 memory1.chat_memory.add_ai_message(machine_block)
             except Exception:
@@ -398,7 +919,7 @@ def api_chat(payload: Dict[str, str] = Body(...)):
     # 4) Wenn Nutzer bestätigt und wir Materialzeilen haben → bestätigten Block erzeugen
     if ready:
         # Letzte verwertbare Materials suchen (aus aktueller Antwort oder History)
-        items = _extract_materials_from_text_any(reply_text)
+        items = materials_in_reply or []
         if not items:
             hist = memory1.load_memory_variables({}).get("chat_history", "")
             items = _extract_materials_from_text_any(hist)
@@ -415,6 +936,7 @@ def api_chat(payload: Dict[str, str] = Body(...)):
                 "- Mengen übernommen; Angebot wird jetzt erstellt.\n\n"
                 + confirmed_block
             )
+            materials_in_reply = items
         else:
             # wir können nicht bestätigen, weil uns Materials fehlen
             ready = False
@@ -423,6 +945,45 @@ def api_chat(payload: Dict[str, str] = Body(...)):
     # markieren wir trotzdem ready → UI kann Angebot erzeugen.
     if not ready and has_machine_block:
         ready = True
+
+    # 5) Dünne Katalogsuche für Vorschläge
+    catalog_candidates: List[Dict[str, Any]] = []
+    if LLM1_THIN_RETRIEVAL:
+        # Falls aktuelle Antwort nichts enthält, versuche letzte AI-Nachricht aus History
+        lookup_materials = materials_in_reply
+        if not lookup_materials:
+            hist = memory1.load_memory_variables({}).get("chat_history", "")
+            lookup_materials = _extract_materials_from_text_any(hist)
+        if lookup_materials:
+            catalog_candidates = _build_catalog_candidates(lookup_materials)
+            if catalog_candidates:
+                lines = []
+                for cand in catalog_candidates:
+                    options = [opt.get("name") for opt in cand.get("options", []) if opt.get("name")]
+                    options = [o for o in options if o]
+                    if cand.get("status") == "matched" and options:
+                        top_line = f"- {cand['query']} → {options[0]}"
+                        if len(options) > 1:
+                            top_line += f" (Alternativen: {', '.join(options[1:3])})"
+                        lines.append(top_line)
+                    else:
+                        lines.append(f"- {cand['query']} → kein Treffer (bitte spezifizieren)")
+                reply_text += "\n\n**Katalog-Vorschläge**\n\n" + "\n".join(lines)
+                if LLM1_MODE == "merge":
+                    auto_lines = []
+                    for cand in catalog_candidates:
+                        sku = cand.get("selected_catalog_item_id")
+                        if not sku:
+                            continue
+                        canonical = cand.get("canonical_name") or cand.get("matched_sku") or ""
+                        auto_lines.append(f"Automatisch zugeordnet: {cand.get('query')} → {canonical} (SKU {sku})")
+                    if auto_lines:
+                        reply_text += "\n\n" + "\n".join(auto_lines)
+                catalog_block = _make_catalog_block(catalog_candidates)
+                try:
+                    memory1.chat_memory.add_ai_message(catalog_block)
+                except Exception:
+                    pass
 
     return {"reply": reply_text, "ready_for_offer": ready}
 
@@ -437,24 +998,29 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
 
     message = (payload.get("message") or "").strip()
     products = payload.get("products")
+    business_cfg = {"availability": {}, "price": {}, "margin": {}, "brand_boost": {}}
 
     # --- exakte Katalogzeilen finden ---
-    catalog_lines = [(d.page_content or "").strip() for d in DOCUMENTS]
-    catalog_lower = {line.lower(): line for line in catalog_lines}
-
-    def find_exact_catalog_lines(terms: list[str]) -> list[str]:
+    def find_exact_catalog_lines(terms: list[str], skus: list[str]) -> list[str]:
         ctx, seen = [], set()
-        # 1) exakte Treffer
+        # 1) Treffer via SKU
+        for sku in skus:
+            if not sku:
+                continue
+            line = CATALOG_TEXT_BY_SKU.get(sku)
+            if line and line not in seen:
+                ctx.append(line); seen.add(line)
+        # 2) exakte Treffer nach Name
         for t in terms:
             key = (t or "").strip().lower()
-            if key and key in catalog_lower:
-                line = catalog_lower[key]
+            if key and key in CATALOG_TEXT_BY_NAME:
+                line = CATALOG_TEXT_BY_NAME[key]
                 if line not in seen:
                     ctx.append(line); seen.add(line)
-        # 2) Fallback Retriever
+        # 3) Fallback Retriever
         for t in terms:
             key = (t or "").strip().lower()
-            if not key or key in catalog_lower:
+            if not key or key in CATALOG_TEXT_BY_NAME:
                 continue
             hits = RETRIEVER.get_relevant_documents(t)[:8]
             for h in hits:
@@ -484,8 +1050,39 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         if not chosen_products:
             raise HTTPException(400, "Keine Produkte erkannt. Sende 'products'[] oder eine Materialien-Liste im 'message'.")
 
+    hist_for_catalog = memory1.load_memory_variables({}).get("chat_history", "")
+    catalog_memory_map = _extract_catalog_map(hist_for_catalog)
+    normalized_pairs: List[Tuple[str, str, Optional[str]]] = []
+    normalized_lookup: Dict[str, Tuple[str, Optional[str]]] = {}
+    for original in chosen_products:
+        info = catalog_memory_map.get((original or "").lower())
+        canonical = info.get("canonical_name") if info else None
+        sku = info.get("matched_sku") if info else None
+        canonical_name = canonical or original
+        normalized_pairs.append((original, canonical_name, sku))
+        normalized_lookup[original.strip().lower()] = (canonical_name, sku)
+
+    normalized_names = [pair[1] for pair in normalized_pairs]
+    matched_skus = [pair[2] for pair in normalized_pairs if pair[2]]
+    chosen_products = normalized_names
+
     # --- Kontext bauen ---
-    ctx_lines = find_exact_catalog_lines(chosen_products)
+    ctx_lines = find_exact_catalog_lines(normalized_names, matched_skus)
+    if not ctx_lines and not matched_skus and normalized_names and RETRIEVER is not None:
+        try:
+            rerank = rank_main(normalized_names[0], RETRIEVER, top_k=1, business_cfg=business_cfg)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("rank_main fallback failed: %s", exc)
+            rerank = []
+        if rerank:
+            top = rerank[0]
+            ctx_line = CATALOG_TEXT_BY_SKU.get(top.get("sku") or "") or CATALOG_TEXT_BY_NAME.get(
+                (top.get("name") or "").lower(), ""
+            )
+            if ctx_line:
+                logger.info("offer.rank_main_fallback sku=%s name=%s", top.get("sku"), top.get("name"))
+                ctx_lines.append(ctx_line)
+
     if not ctx_lines:
         return {"positions": [], "raw": "[]"}
 
@@ -498,7 +1095,10 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
             break
 
     context = "\n\n---\n".join(chunks)
-    product_query = "Erstelle ein Angebot für folgende Produkte:\n" + "\n".join(f"- {p}" for p in chosen_products)
+    product_query = "Erstelle ein Angebot für folgende Produkte:\n" + "\n".join(
+        f"- {name}" + (f" (SKU: {sku})" if sku else "")
+        for (_, name, sku) in normalized_pairs
+    )
 
     # --- LLM2 direkt ansteuern ---
     formatted = PROMPT2.format(context=context, question=product_query)
@@ -515,6 +1115,79 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
         positions = parse_positions(json_text)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"JSON-Parsing-Fehler: {e}. Preview: {json_text[:200]}")
+
+    latest_items = _extract_last_machine_items(hist_for_catalog, prefer_status="bestätigt") or _extract_last_machine_items(hist_for_catalog)
+
+    if latest_items:
+        def _find_existing(target: str) -> Optional[dict]:
+            key = (target or "").strip().lower()
+            for pos in positions:
+                pname = (pos.get("name") or "").strip().lower()
+                if not pname:
+                    continue
+                if pname == key or pname in key or key in pname:
+                    return pos
+            return None
+
+        for item in latest_items:
+            name = (item.get("name") or "").strip()
+            if not name:
+                continue
+            if _find_existing(name):
+                continue
+            lookup_key = name.lower()
+            if lookup_key in normalized_lookup:
+                name = normalized_lookup[lookup_key][0]
+            raw_qty = item.get("menge") or 0
+            einheit = item.get("einheit") or ""
+            try:
+                menge_float = float(raw_qty)
+            except (TypeError, ValueError):
+                menge_float = 0.0
+            menge_value = int(menge_float) if menge_float.is_integer() else round(menge_float, 3)
+            new_pos = {
+                "nr": len(positions) + 1,
+                "name": name,
+                "menge": menge_value,
+                "einheit": einheit,
+                "epreis": 0.0,
+                "gesamtpreis": 0.0,
+            }
+            positions.append(new_pos)
+
+    if RETRIEVER is not None:
+        for pos in positions:
+            if pos.get("matched_sku"):
+                continue
+            query_name = pos.get("name") or ""
+            if not query_name:
+                continue
+            try:
+                ranked = rank_main(query_name, RETRIEVER, top_k=5, business_cfg=business_cfg)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("rank_main enrichment failed: %s", exc)
+                ranked = []
+            if not ranked:
+                continue
+            top = ranked[0]
+            if top.get("sku"):
+                pos["matched_sku"] = top["sku"]
+            if top.get("name"):
+                pos["name"] = top["name"]
+            pos.setdefault("reasons", []).append("rank_main_top1")
+
+    harmonized_positions: List[Dict[str, Any]] = []
+    for pos in positions:
+        pos2, harmonize_reasons = harmonize_material_line(pos)
+        if harmonize_reasons:
+            pos2.setdefault("reasons", []).extend(harmonize_reasons)
+        try:
+            menge_val = float(pos2.get("menge", 0))
+            pos2["menge"] = int(menge_val) if menge_val.is_integer() else round(menge_val, 3)
+        except (TypeError, ValueError):
+            pass
+        harmonized_positions.append(pos2)
+    positions = harmonized_positions
 
     return {"positions": positions, "raw": answer}
 
