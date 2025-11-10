@@ -13,6 +13,7 @@ venv/
 
 # FastAPI outputs
 backend/chroma_db/
+backend/var/
 backend/outputs/
 
 # Node / Frontend

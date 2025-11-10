@@ -2,6 +2,8 @@
 const RAW_BASE = import.meta.env.VITE_API_BASE || "";
 // Stelle sicher, dass kein trailing slash am Ende steht
 const API_BASE = RAW_BASE.replace(/\/+$/, "");
+const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || "";
+const ADMIN_HEADERS = ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
 
 // --- Fetch-Helper (JSON) ---
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -137,6 +139,17 @@ export type ResetResponse = {
   message?: string;
 };
 
+// Admin
+export type AdminProduct = {
+  company_id: string;
+  sku: string;
+  name: string;
+  description?: string | null;
+  active: boolean;
+  updated_at?: string | null;
+};
+export type SynonymMap = Record<string, string[]>;
+
 // ------------------------------------------------------------
 //                        API-Client
 // ------------------------------------------------------------
@@ -210,4 +223,53 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  admin: {
+    listProducts: (companyId: string, includeDeleted = false) =>
+      jsonFetch<AdminProduct[]>(
+        `/api/admin/products?company_id=${encodeURIComponent(companyId)}&include_deleted=${includeDeleted ? "1" : "0"}`,
+        {
+          method: "GET",
+          headers: { ...ADMIN_HEADERS },
+        },
+      ),
+    upsertProduct: (
+      companyId: string,
+      product: { sku: string; name: string; description?: string; active?: boolean },
+    ) =>
+      jsonFetch<AdminProduct>(`/api/admin/products`, {
+        method: "POST",
+        headers: { ...ADMIN_HEADERS },
+        body: JSON.stringify({
+          company_id: companyId,
+          sku: product.sku,
+          name: product.name,
+          description: product.description ?? "",
+          active: product.active ?? true,
+        }),
+      }),
+    deleteProduct: (companyId: string, sku: string) =>
+      jsonFetch<{ deleted: boolean }>(
+        `/api/admin/products/${encodeURIComponent(sku)}?company_id=${encodeURIComponent(companyId)}`,
+        {
+          method: "DELETE",
+          headers: { ...ADMIN_HEADERS },
+        },
+      ),
+    listSynonyms: (companyId: string) =>
+      jsonFetch<SynonymMap>(`/api/admin/synonyms?company_id=${encodeURIComponent(companyId)}`, {
+        method: "GET",
+        headers: { ...ADMIN_HEADERS },
+      }),
+    addSynonyms: (companyId: string, canon: string, variants: string[]) =>
+      jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
+        method: "POST",
+        headers: { ...ADMIN_HEADERS },
+        body: JSON.stringify({
+          company_id: companyId,
+          canon,
+          synonyms: variants,
+        }),
+      }),
+  },
 };

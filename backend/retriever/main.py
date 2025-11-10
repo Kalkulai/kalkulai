@@ -3,6 +3,8 @@ from __future__ import annotations
 """Main (server-side) retrieval pipeline with light-weight heuristics."""
 
 import re
+import logging
+import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -45,6 +47,8 @@ _GENERIC_STOP = {"weiß", "weiss", "beige", "grau", "premium", "matt", "seidenma
 
 _GRUND_QUERY_TOKENS = {"tiefgrund", "haftgrund", "grundierung", "putzgrund", "isoliergrund", "sperrgrund"}
 _GRUND_NAME_TOKENS = {"tief", "haft", "grund", "grundierung", "putzgrund", "isolier", "sperr", "tiefgrund"}
+DEFAULT_COMPANY_ID = os.getenv("DEFAULT_COMPANY_ID", "default")
+logger = logging.getLogger("kalkulai.retriever")
 _VOL_RE = re.compile(r"(\d+(?:[.,][0-9]+)?)\s*(l|liter|ml)\b", re.IGNORECASE)
 _STOPWORDS = {
     "ich",
@@ -153,12 +157,16 @@ def rank_main(
     retriever: Any,
     top_k: int = 5,
     business_cfg: Optional[Dict[str, Any]] = None,
+    company_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Return top-N catalog candidates combining lexical and business scoring."""
 
     if top_k <= 0:
         return []
 
+    company_key = company_id or None
+    if retriever is None and company_key:
+        retriever = get_company_index(company_key)
     if retriever is None:
         return _thin_fallback_results(query, top_k)
 
@@ -573,3 +581,34 @@ def _thin_fallback_results(query: str, top_k: int) -> List[Dict[str, Any]]:
             }
         )
     return fallback_results
+
+
+def get_company_index(company_id: Optional[str] = None):
+    target = company_id or DEFAULT_COMPANY_ID
+    if not target:
+        return None
+    try:
+        from backend.retriever import index_manager
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Dynamic index unavailable for %s (%s)", target, exc)
+        return None
+    logger.info("Using dynamic retriever company_id=%s", target)
+    return _CompanyRetriever(target, index_manager)
+
+
+class _CompanyRetriever:
+    def __init__(self, company_id: str, manager_module):
+        self.company_id = company_id
+        self._manager = manager_module
+
+    def get_relevant_documents(self, query: str):
+        from langchain.schema import Document as LCDocument  # type: ignore
+
+        hits = self._manager.search_index(self.company_id, query, top_k=20)
+        return [
+            LCDocument(
+                page_content=hit.get("text") or hit.get("name") or "",
+                metadata={"name": hit.get("name"), "sku": hit.get("sku")},
+            )
+            for hit in hits
+        ]

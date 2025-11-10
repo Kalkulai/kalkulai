@@ -32,6 +32,8 @@ from backend.shared.normalize.text import normalize_query as shared_normalize_qu
 from backend.shared.normalize.text import tokenize as shared_tokenize
 from backend.retriever.thin import search_catalog_thin
 from backend.retriever.main import rank_main
+from backend.retriever import index_manager
+from backend.app import admin_api
 
 
 # ---------- Logging ----------
@@ -70,6 +72,7 @@ LLM1_THIN_RETRIEVAL = os.getenv("LLM1_THIN_RETRIEVAL", "0") == "1"
 CATALOG_TOP_K       = max(1, int(os.getenv("CATALOG_TOP_K", "5")))
 CATALOG_CACHE_TTL   = max(5, int(os.getenv("CATALOG_CACHE_TTL", "60")))
 CATALOG_QUERIES_PER_TURN = max(1, int(os.getenv("CATALOG_QUERIES_PER_TURN", "2")))
+DEFAULT_COMPANY_ID = os.getenv("DEFAULT_COMPANY_ID", "default")
 
 LLM1_MODE = (os.getenv("LLM1_MODE", "assistive") or "assistive").strip().lower()
 ADOPT_THRESHOLD = float(os.getenv("ADOPT_THRESHOLD", "0.82"))
@@ -201,6 +204,8 @@ def _normalize_query(text: str) -> str:
 def _tokenize(text: str) -> set[str]:
     """Wrapper to keep legacy call sites while using shared tokenizer."""
     return set(shared_tokenize(text))
+
+
 
 
 def _catalog_cache_key(query: str, limit: int) -> Tuple[str, int]:
@@ -504,25 +509,17 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Kalkulai Backend", lifespan=_lifespan)
-ALLOW_ALL_ORIGINS = os.getenv("ALLOW_ALL_ORIGINS", "0") == "1"
-cors_kwargs = dict(
-    allow_credentials=True,
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-if ALLOW_ALL_ORIGINS:
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], **cors_kwargs)
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        allow_origin_regex=ALLOWED_ORIGIN_REGEX,
-        **cors_kwargs,
-    )
-
 # Statische Auslieferung der generierten PDFs (aus /app/outputs)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+app.include_router(admin_api.router)
 
 # Root (Health)
 @app.get("/")
@@ -537,40 +534,52 @@ def api_health():
 def api_catalog_search(
     q: str = Query(..., min_length=2, description="Freitext-Suche (Name, Synonym)"),
     top_k: int = Query(5, ge=1, le=10, description="Anzahl der Treffer (maximal)"),
+    company_id: Optional[str] = Query(None),
 ):
-    if RETRIEVER is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Katalogsuche aktuell nicht verfügbar (Retriever nicht initialisiert).",
-        )
     limit = min(top_k, CATALOG_TOP_K)
     started = time.time()
-    try:
-        hits = search_catalog_thin(
-            query=q,
-            top_k=limit,
-            catalog_items=CATALOG_ITEMS,
-            synonyms_path=str(SYNONYMS_PATH),
-        )
-        results = [
-            {
-                "sku": h.get("sku"),
-                "name": h.get("name"),
-                "unit": h.get("unit"),
-                "pack_sizes": h.get("pack_sizes"),
-                "synonyms": h.get("synonyms", []),
-                "category": h.get("category"),
-                "brand": h.get("brand"),
-                "confidence": round(float(h.get("score_final", 0.0)), 3),
-            }
-            for h in hits
-        ]
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
-        results = _catalog_lookup(q, limit)
+
+    if company_id:
+        results = _company_catalog_search(company_id, q, limit)
+    else:
+        if RETRIEVER is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Katalogsuche aktuell nicht verfügbar (Retriever nicht initialisiert).",
+            )
+        try:
+            hits = search_catalog_thin(
+                query=q,
+                top_k=limit,
+                catalog_items=CATALOG_ITEMS,
+                synonyms_path=str(SYNONYMS_PATH),
+            )
+            results = [
+                {
+                    "sku": h.get("sku"),
+                    "name": h.get("name"),
+                    "unit": h.get("unit"),
+                    "pack_sizes": h.get("pack_sizes"),
+                    "synonyms": h.get("synonyms", []),
+                    "category": h.get("category"),
+                    "brand": h.get("brand"),
+                    "confidence": round(float(h.get("score_final", 0.0)), 3),
+                }
+                for h in hits
+            ]
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
+            results = _catalog_lookup(q, limit)
 
     took = int((time.time() - started) * 1000)
-    logger.info("catalog.search q=%r limit=%d took_ms=%d count=%d", q, limit, took, len(results))
+    logger.info(
+        "catalog.search q=%r company=%s limit=%d took_ms=%d count=%d",
+        q,
+        company_id or "default",
+        limit,
+        took,
+        len(results),
+    )
     return {
         "query": q,
         "limit": limit,
@@ -578,6 +587,29 @@ def api_catalog_search(
         "results": results,
         "took_ms": took,
     }
+
+
+def _company_catalog_search(company_id: str, query: str, limit: int) -> List[Dict[str, object]]:
+    try:
+        hits = index_manager.search_index(company_id, query, top_k=limit)
+    except Exception as exc:
+        logger.warning("company catalog search failed for %s: %s", company_id, exc)
+        hits = []
+    results: List[Dict[str, object]] = []
+    for hit in hits:
+        results.append(
+            {
+                "sku": hit.get("sku"),
+                "name": hit.get("name"),
+                "unit": None,
+                "pack_sizes": None,
+                "synonyms": [],
+                "category": None,
+                "brand": None,
+                "confidence": 1.0,
+            }
+        )
+    return results
 
 # ---- NEU: Reset-Endpoints (Memory & Wizard) ----
 @app.post("/api/session/reset")
@@ -690,6 +722,14 @@ def _make_machine_block(status: str, items: list[dict]) -> str:
 
 CATALOG_BLOCK_RE = re.compile(r"---\s*status:\s*katalog\s*candidates:\s*(.*?)---", re.IGNORECASE | re.DOTALL)
 MACHINE_BLOCK_RE = re.compile(r"---\s*(?:projekt_id:.*?\n)?(?:version:.*?\n)?status:\s*([a-zäöüß]+)\s*materialien:\s*(.*?)---", re.IGNORECASE | re.DOTALL)
+
+def _strip_machine_sections(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = MACHINE_BLOCK_RE.sub("", text)
+    cleaned = CATALOG_BLOCK_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 def _build_catalog_candidates(items: List[dict]) -> List[Dict[str, Any]]:
     if not LLM1_THIN_RETRIEVAL or not items:
@@ -985,12 +1025,18 @@ def api_chat(payload: Dict[str, str] = Body(...)):
                 except Exception:
                     pass
 
-    return {"reply": reply_text, "ready_for_offer": ready}
+    display_text = _strip_machine_sections(reply_text) or reply_text.strip()
+    followup_prompt = "Passen die Mengen so oder wünschen Sie Änderungen?"
+    if not (bot_confirms or user_confirms):
+        if followup_prompt.lower() not in display_text.lower():
+            display_text = (display_text.rstrip() + ("\n\n" if display_text else "") + followup_prompt).strip()
+
+    return {"reply": display_text, "ready_for_offer": ready}
 
 
 # ---- API: Angebot (LLM2 → JSON) ----
 @app.post("/api/offer")
-def api_offer(payload: Dict[str, Any] = Body(...)):
+def api_offer(payload: Dict[str, Any] = Body(...), company_id: Optional[str] = Query(None)):
     if not DOCUMENTS:
         raise HTTPException(500, "Produktdaten nicht geladen (data/bauprodukte_maurerprodukte.txt).")
     if chain2 is None or llm2 is None:
@@ -1070,7 +1116,13 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
     ctx_lines = find_exact_catalog_lines(normalized_names, matched_skus)
     if not ctx_lines and not matched_skus and normalized_names and RETRIEVER is not None:
         try:
-            rerank = rank_main(normalized_names[0], RETRIEVER, top_k=1, business_cfg=business_cfg)
+            rerank = rank_main(
+                normalized_names[0],
+                RETRIEVER,
+                top_k=1,
+                business_cfg=business_cfg,
+                company_id=company_id,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("rank_main fallback failed: %s", exc)
             rerank = []
@@ -1163,7 +1215,13 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
             if not query_name:
                 continue
             try:
-                ranked = rank_main(query_name, RETRIEVER, top_k=5, business_cfg=business_cfg)
+                ranked = rank_main(
+                    query_name,
+                    RETRIEVER,
+                    top_k=5,
+                    business_cfg=business_cfg,
+                    company_id=company_id,
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("rank_main enrichment failed: %s", exc)
                 ranked = []
@@ -1194,7 +1252,7 @@ def api_offer(payload: Dict[str, Any] = Body(...)):
 # ---- API: PDF bauen ----
 @app.post("/api/pdf")
 def api_pdf(payload: Dict[str, Any] = Body(...)):
-    from app.pdf import render_pdf_from_template  # Lazy import to avoid heavy deps during smoke tests
+    from backend.app.pdf import render_pdf_from_template  # Lazy import to avoid heavy deps during smoke tests
 
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
