@@ -4,11 +4,12 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from math import sqrt
 from datetime import datetime
 
+from backend.store import catalog_store
 from backend.store.catalog_store import get_active_products
 
 logger = logging.getLogger("kalkulai.index")
@@ -127,11 +128,32 @@ def _build_docs(products: List[Dict[str, Any]]) -> DocumentArray:
     return docs
 
 
+def _build_docs_without_embedding(products: List[Dict[str, Any]]) -> DocumentArray:
+    docs = DocumentArray()
+    for prod in products:
+        text = _product_to_text(prod)
+        doc = Document(
+            id=str(prod["sku"]),
+            text=text,
+            embedding=[],
+            tags={"sku": prod["sku"], "name": prod.get("name", ""), "text": text},
+        )
+        docs.append(doc)
+    return docs
+
+
 def _build_index(company_id: str) -> DocArrayExactNN:
     products = get_active_products(company_id)
-    docs = _build_docs(products)
+    fallback_mode = not _DOCARRAY_AVAILABLE
+    try:
+        docs = _build_docs(products)
+    except RuntimeError:
+        fallback_mode = True
+        docs = _build_docs_without_embedding(products)
     index = DocArrayExactNN(docs=docs, metric="cosine") if _DOCARRAY_AVAILABLE else DocArrayExactNN(docs=docs)
-    logger.info("index built for company=%s docs=%d", company_id, len(docs))
+    backend_label = "docarray" if (_DOCARRAY_AVAILABLE and not fallback_mode) else "fallback"
+    setattr(index, "backend", backend_label)
+    logger.info("index built for company=%s docs=%d backend=%s", company_id, len(docs), backend_label)
     return index
 
 
@@ -198,13 +220,114 @@ def update_index_incremental(company_id: str, changed_skus: List[str]) -> None:
             entry["last_build_ts"] = time.time()
 
 
-def update_index(company_id: str, skus: List[str]) -> None:
-    """Update embeddings for specific *skus*. Empty lists trigger a rebuild."""
+def _now_ts_iso() -> Tuple[float, str]:
+    ts = time.time()
+    return ts, datetime.utcfromtimestamp(ts).isoformat()
 
-    if not skus:
-        rebuild_index(company_id)
-        return
-    update_index_incremental(company_id, skus)
+
+def _count_index_docs(index: DocArrayExactNN) -> int:
+    docs = getattr(index, "docs", None)
+    if docs is None:
+        mapping = getattr(index, "_map", None)
+        if isinstance(mapping, dict):
+            return len(mapping)
+        stored = getattr(index, "_docs", None)
+        if isinstance(stored, dict):
+            return len(stored)
+        if isinstance(stored, list):
+            return len(stored)
+        return 0
+    return len(docs)
+
+
+def update_index(company_id: str, skus: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Update embeddings for specific *skus* via in-place upsert."""
+
+    index = ensure_company_index(company_id)
+    ts, iso_ts = _now_ts_iso()
+    backend_name = getattr(index, "backend", "docarray" if _DOCARRAY_AVAILABLE else "fallback")
+    if backend_name == "fallback":
+        return _rebuild_fallback_index(company_id, ts, iso_ts)
+
+    requested_skus = [sku for sku in (skus or []) if sku]
+    if not requested_skus:
+        with _CACHE_LOCK:
+            entry = _INDEX_CACHE.get(company_id)
+            docs_total = entry.get("doc_count") if entry else _count_index_docs(index)
+            if entry:
+                entry["last_build_ts"] = ts
+            else:
+                _INDEX_CACHE[company_id] = {
+                    "index": index,
+                    "doc_count": docs_total,
+                    "last_build_ts": ts,
+                }
+        return {
+            "company_id": company_id,
+            "docs": docs_total,
+            "last_build_ts": ts,
+            "built_at": iso_ts,
+            "backend": backend_name,
+        }
+
+    try:
+        products = catalog_store.list_products(company_id, include_deleted=True, filter_skus=requested_skus)
+    except TypeError:
+        products = catalog_store.list_products(company_id, include_deleted=True)
+        products = [prod for prod in products if prod.get("sku") in requested_skus]
+
+    active_products = [prod for prod in products if _is_product_active(prod)]
+    inactive_targets = [str(prod.get("sku")) for prod in products if not _is_product_active(prod) and prod.get("sku")]
+    existing_skus = {str(prod.get("sku")) for prod in products if prod.get("sku")}
+    missing = [sku for sku in requested_skus if sku not in existing_skus]
+    inactive_targets.extend(sku for sku in missing if sku not in inactive_targets)
+
+    try:
+        docs = _build_docs(active_products)
+    except RuntimeError:
+        return _rebuild_fallback_index(company_id, ts, iso_ts)
+
+    if inactive_targets:
+        if hasattr(index, "delete"):
+            try:
+                index.delete(inactive_targets)
+            except Exception:
+                pass
+        elif hasattr(index, "remove"):
+            try:
+                index.remove(inactive_targets)
+            except Exception:
+                pass
+
+    if docs:
+        if hasattr(index, "index"):
+            index.index(docs)
+        elif hasattr(index, "add"):
+            try:
+                index.add(docs)
+            except Exception:
+                pass
+
+    existing_docs = getattr(index, "docs", None)
+    if isinstance(existing_docs, list):
+        remaining = [doc for doc in existing_docs if getattr(doc, "tags", {}).get("sku") not in requested_skus]
+        index.docs = remaining + list(docs or [])
+
+    total_docs = _count_index_docs(index)
+    with _CACHE_LOCK:
+        _INDEX_CACHE[company_id] = {
+            "index": index,
+            "doc_count": total_docs,
+            "last_build_ts": ts,
+        }
+
+    return {
+        "company_id": company_id,
+        "docs": total_docs,
+        "last_build_ts": ts,
+        "built_at": iso_ts,
+        "backend": backend_name,
+    }
 
 
 def index_stats(company_id: str) -> Dict[str, Any]:
@@ -274,3 +397,30 @@ def _get_doc_count(index: DocArrayExactNN) -> int:
     if hasattr(index, "_docs"):
         return len(getattr(index, "_docs"))
     return 0
+
+
+def _rebuild_fallback_index(company_id: str, ts: float, iso_ts: str) -> Dict[str, Any]:
+    index = _build_index(company_id)
+    setattr(index, "backend", "fallback")
+    doc_count = _get_doc_count(index)
+    with _CACHE_LOCK:
+        _INDEX_CACHE[company_id] = {
+            "index": index,
+            "doc_count": doc_count,
+            "last_build_ts": ts,
+        }
+    return {
+        "company_id": company_id,
+        "docs": doc_count,
+        "last_build_ts": ts,
+        "built_at": iso_ts,
+        "backend": "fallback",
+    }
+
+
+def _is_product_active(product: Dict[str, Any]) -> bool:
+    if "is_active" in product:
+        return bool(product["is_active"])
+    if "active" in product:
+        return bool(product["active"])
+    return True

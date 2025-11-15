@@ -143,7 +143,12 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
         raise ValueError("Product 'sku' and 'name' must be non-empty.")
     description = product_dict.get("description")
     desc_val = str(description) if description is not None else None
-    is_active_val = bool(product_dict.get("is_active", True))
+    is_active_raw = product_dict.get("is_active")
+    if is_active_raw is None and "active" in product_dict:
+        is_active_raw = product_dict["active"]
+    is_active_specified = is_active_raw is not None
+    is_active_val = bool(is_active_raw) if is_active_specified else True
+    reactivating = bool(is_active_raw) if is_active_specified else False
     updated = datetime.utcnow().isoformat()
 
     if _HAS_SQLMODEL:
@@ -156,6 +161,8 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
             product.name = name
             product.description = desc_val
             product.is_active = is_active_val
+            if reactivating and hasattr(product, "is_deleted"):
+                setattr(product, "is_deleted", False)
             product.updated_at = datetime.fromisoformat(updated)
             session.commit()
             session.refresh(product)
@@ -184,6 +191,15 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
             },
         )
         conn.commit()
+        if reactivating:
+            try:
+                conn.execute(
+                    "UPDATE products SET is_deleted=0 WHERE company_id=? AND sku=?",
+                    (company_id, sku),
+                )
+                conn.commit()
+            except Exception:
+                pass
         row = conn.execute(
             "SELECT company_id, sku, name, description, is_active, updated_at FROM products WHERE company_id=? AND sku=?",
             (company_id, sku),
@@ -191,12 +207,18 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
         return _normalize_product_row(dict(row))
 
 
-def list_products(company_id: str, include_deleted: bool = False) -> List[Dict[str, object]]:
+def list_products(
+    company_id: str,
+    include_deleted: bool = False,
+    filter_skus: Optional[List[str]] = None,
+) -> List[Dict[str, object]]:
     if _HAS_SQLMODEL:
         with _session() as session:
             stmt = select(Product).where(Product.company_id == company_id)
             if not include_deleted:
                 stmt = stmt.where(Product.is_active.is_(True))
+            if filter_skus:
+                stmt = stmt.where(Product.sku.in_(filter_skus))
             return [prod.dict(exclude={"id"}) for prod in session.exec(stmt).all()]
     with _sqlite_conn() as conn:
         query = (
@@ -205,6 +227,10 @@ def list_products(company_id: str, include_deleted: bool = False) -> List[Dict[s
         params = [company_id]
         if not include_deleted:
             query += " AND is_active=1"
+        if filter_skus:
+            placeholders = ",".join(["?"] * len(filter_skus))
+            query += f" AND sku IN ({placeholders})"
+            params.extend(filter_skus)
         rows = conn.execute(query, tuple(params)).fetchall()
         return [_normalize_product_row(dict(r)) for r in rows]
 

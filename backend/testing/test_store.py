@@ -47,3 +47,22 @@ def test_synonym_flow(tmp_path, monkeypatch):
     assert "tiefgrund" in mapping
     assert set(mapping["tiefgrund"]) == {"tief grund", "tief-grund"}
     assert mapping["putzgrund"] == ["putz-grund"]
+
+
+def test_reactivate_product_brings_back_soft_deleted_entry(tmp_path, monkeypatch):
+    store = _reload_store(tmp_path, monkeypatch)
+    store.init_db()
+
+    store.upsert_product("demo", {"sku": "SKU-2", "name": "Tiefgrund 10 L"})
+    store.delete_product("demo", "SKU-2")
+    assert not store.get_active_products("demo")
+
+    store.upsert_product("demo", {"sku": "SKU-2", "name": "Tiefgrund 10 L", "is_active": True})
+
+    active_products = store.get_active_products("demo")
+    assert len(active_products) == 1
+    assert active_products[0]["sku"] == "SKU-2"
+
+    visible_products = store.list_products("demo", include_deleted=False)
+    assert len(visible_products) == 1
+    assert visible_products[0]["sku"] == "SKU-2"

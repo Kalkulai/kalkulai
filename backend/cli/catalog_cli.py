@@ -298,8 +298,7 @@ def cmd_rebuild_index(args: argparse.Namespace) -> None:
 def cmd_update_index(args: argparse.Namespace) -> None:
     company_id = args.company_id
     skus = _parse_skus(args.skus)
-    index_manager.update_index(company_id, skus)
-    stats = index_manager.index_stats(company_id)
+    stats = index_manager.update_index(company_id, skus)
     print(
         f"Updated index for {company_id}: skus={len(skus)} docs={stats['docs']} backend={stats['backend']}."
     )

@@ -154,8 +154,7 @@ def rebuild_index(payload: Dict[str, str] = Body(...), _: None = Depends(require
 
 @router.post("/index/update", response_model=Dict[str, object])
 def update_index(payload: IndexUpdateIn, _: None = Depends(require_admin)):
-    index_manager.update_index_incremental(payload.company_id, payload.changed_skus)
-    return index_manager.get_index_stats(payload.company_id)
+    return index_manager.update_index(payload.company_id, payload.changed_skus)
 
 
 @router.get("/index/stats", response_model=Dict[str, object])
