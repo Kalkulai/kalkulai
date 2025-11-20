@@ -467,8 +467,8 @@ def test_chat_turn_blocks_unknown_materials(tmp_path):
     result = chat_turn(message="Bitte Angebot", ctx=ctx)
 
     assert result["ready_for_offer"] is False
-    assert "Produktprüfung" in result["reply"]
-    assert "Fantasieprodukt" in result["reply"]
+    assert "Hinweis zur Produktprüfung" in result["reply"]
+    assert "- Fantasieprodukt" in result["reply"]
 
 
 def test_missing_catalog_handles_colon_annotations(tmp_path):
@@ -498,6 +498,7 @@ def test_generate_offer_positions_requires_known_products(tmp_path):
     detail = exc.value.message
     assert isinstance(detail, dict)
     assert detail["unknown_products"] == ["Fantasieprodukt"]
+    assert detail["message"].startswith("Angebot kann noch nicht erstellt werden")
 
 
 def test_generate_offer_positions_accepts_synonym(tmp_path, monkeypatch):
