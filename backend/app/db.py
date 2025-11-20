@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
+import re
 
 try:
     from striprtf.striprtf import rtf_to_text  # type: ignore
@@ -15,6 +16,26 @@ except ImportError:  # pragma: no cover - lightweight fallback for smoke tests
     @dataclass
     class Document:  # type: ignore[override]
         page_content: str
+        metadata: Dict[str, object] | None = None  # type: ignore[assignment]
+
+
+_SKU_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+
+def _gen_sku(name: str) -> str:
+    slug = _SKU_SANITIZE_RE.sub("-", name.lower()).strip("-")
+    return slug or f"produkt-{abs(hash(name))}"
+
+
+def _parse_menge_line(line: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Wandelt 'Menge: 1 Eimer (10 L)' in (unit, pack_sizes).
+    """
+    raw = line.replace("Menge:", "", 1).strip()
+    if not raw:
+        return None, None
+    parts = raw.split()
+    unit = parts[-1] if parts else None
+    return unit, raw
 
 
 def _ensure_rtf_support(debug: bool) -> None:
@@ -47,7 +68,42 @@ def load_products_file(file_path: Path, debug: bool = False) -> List[Document]:
     for entry in raw.split("Produkt: "):
         entry = entry.strip()
         if entry:
-            docs.append(Document(page_content="Produkt: " + entry))
+            lines = entry.splitlines()
+            name = lines[0].strip()
+
+            desc = ""
+            menge_line = ""
+            brand = ""
+            category = ""
+            for line in lines[1:]:
+                if line.startswith("Beschreibung:"):
+                    desc = line.replace("Beschreibung:", "", 1).strip()
+                elif line.startswith("Menge:"):
+                    menge_line = line
+                elif line.startswith("Marke:"):
+                    brand = line.replace("Marke:", "", 1).strip()
+                elif line.startswith("Kategorie:"):
+                    category = line.replace("Kategorie:", "", 1).strip()
+
+            unit, pack_sizes = _parse_menge_line(menge_line)
+
+            metadata: Dict[str, Optional[str] | List[str]] = {
+                "name": name,
+                "description": desc or None,
+                "unit": unit,
+                "pack_sizes": pack_sizes,
+                "sku": _gen_sku(name),
+                "category": category or None,
+                "brand": brand or None,
+                "synonyms": [],
+            }
+
+            docs.append(
+                Document(
+                    page_content="Produkt: " + entry,
+                    metadata=metadata,  # type: ignore[arg-type]
+                )
+            )
 
     if debug:
         print(f"[DEBUG] Geladene Produkt-Docs: {len(docs)}")

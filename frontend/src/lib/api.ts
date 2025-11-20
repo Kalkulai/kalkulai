@@ -2,6 +2,8 @@
 const RAW_BASE = import.meta.env.VITE_API_BASE || "";
 // Stelle sicher, dass kein trailing slash am Ende steht
 const API_BASE = RAW_BASE.replace(/\/+$/, "");
+const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || "";
+const ADMIN_HEADERS = ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
 
 // --- Fetch-Helper (JSON) ---
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -64,6 +66,25 @@ export type PdfRequestPayload = {
 };
 export type PdfResponse = { pdf_url: string; context: any };
 
+// Catalog
+export type CatalogSearchResult = {
+  sku: string | null;
+  name: string | null;
+  unit: string | null;
+  pack_sizes: string | null;
+  synonyms: string[];
+  category: string | null;
+  brand: string | null;
+  confidence: number | null;
+};
+export type CatalogSearchResponse = {
+  query: string;
+  limit: number;
+  count: number;
+  results: CatalogSearchResult[];
+  took_ms: number;
+};
+
 // Wizard
 export type WizardUISchema = {
   type: "singleSelect" | "multiSelect" | "number" | "info";
@@ -111,12 +132,42 @@ export type RevenueGuardResponse = {
   missing: RevenueGuardSuggestion[];
   rules_fired: { id: string; label?: string; hit: boolean; explanation?: string }[];
 };
+export type RevenueGuardMaterial = {
+  id: string;
+  name: string;
+  keywords: string[];
+  severity: "low" | "medium" | "high";
+  category: string;
+  reason?: string;
+  description?: string;
+  einheit?: string | null;
+  default_menge?: number | null;
+  confidence?: number | null;
+  enabled?: boolean;
+  editable?: boolean;
+  origin?: "builtin" | "custom";
+};
+export type RevenueGuardMaterialsResponse = {
+  items: RevenueGuardMaterial[];
+};
+export type RevenueGuardMaterialInput = Omit<RevenueGuardMaterial, "editable">;
 
 // Reset
 export type ResetResponse = {
   ok: boolean;
   message?: string;
 };
+
+// Admin
+export type AdminProduct = {
+  company_id: string;
+  sku: string;
+  name: string;
+  description?: string | null;
+  active: boolean;
+  updated_at?: string | null;
+};
+export type SynonymMap = Record<string, string[]>;
 
 // ------------------------------------------------------------
 //                        API-Client
@@ -160,6 +211,15 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // Catalog search (thin retrieval)
+  catalogSearch: (query: string, topK = 5) =>
+    jsonFetch<CatalogSearchResponse>(
+      `/api/catalog/search?q=${encodeURIComponent(query)}&top_k=${encodeURIComponent(
+        Math.max(1, topK),
+      )}`,
+      { method: "GET" },
+    ),
+
   // --- Wizard Endpoints ---
   wizardNext: (sessionId?: string, answers?: Record<string, any>) =>
     jsonFetch<WizardStepResponse>(`/wizard/maler/next`, {
@@ -182,4 +242,60 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  revenueGuardMaterials: () => jsonFetch<RevenueGuardMaterialsResponse>(`/api/revenue-guard/materials`),
+  saveRevenueGuardMaterials: (items: RevenueGuardMaterialInput[]) =>
+    jsonFetch<RevenueGuardMaterialsResponse>(`/api/revenue-guard/materials`, {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+    }),
+
+  admin: {
+    listProducts: (companyId: string, includeDeleted = false) =>
+      jsonFetch<AdminProduct[]>(
+        `/api/admin/products?company_id=${encodeURIComponent(companyId)}&include_deleted=${includeDeleted ? "1" : "0"}`,
+        {
+          method: "GET",
+          headers: { ...ADMIN_HEADERS },
+        },
+      ),
+    upsertProduct: (
+      companyId: string,
+      product: { sku: string; name: string; description?: string; active?: boolean },
+    ) =>
+      jsonFetch<AdminProduct>(`/api/admin/products`, {
+        method: "POST",
+        headers: { ...ADMIN_HEADERS },
+        body: JSON.stringify({
+          company_id: companyId,
+          sku: product.sku,
+          name: product.name,
+          description: product.description ?? "",
+          active: product.active ?? true,
+        }),
+      }),
+    deleteProduct: (companyId: string, sku: string) =>
+      jsonFetch<{ deleted: boolean }>(
+        `/api/admin/products/${encodeURIComponent(sku)}?company_id=${encodeURIComponent(companyId)}`,
+        {
+          method: "DELETE",
+          headers: { ...ADMIN_HEADERS },
+        },
+      ),
+    listSynonyms: (companyId: string) =>
+      jsonFetch<SynonymMap>(`/api/admin/synonyms?company_id=${encodeURIComponent(companyId)}`, {
+        method: "GET",
+        headers: { ...ADMIN_HEADERS },
+      }),
+    addSynonyms: (companyId: string, canon: string, variants: string[]) =>
+      jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
+        method: "POST",
+        headers: { ...ADMIN_HEADERS },
+        body: JSON.stringify({
+          company_id: companyId,
+          canon,
+          synonyms: variants,
+        }),
+      }),
+  },
 };

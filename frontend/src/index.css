@@ -131,3 +131,26 @@
     @apply transition-all duration-200 ease-in-out;
   }
 }
+
+ .markdown-body ul,
+ .markdown-body ol {
+   list-style-position: outside;
+   margin-left: 1.25rem;
+   padding-left: 0.25rem;
+ }
+ 
+ .markdown-body ul {
+   list-style-type: disc;
+ }
+ 
+ .markdown-body ol {
+   list-style-type: decimal;
+ }
+ 
+ .markdown-body li::marker {
+   color: hsl(var(--muted-foreground));
+ }
+
+.markdown-body table {
+  border-collapse: collapse;
+}

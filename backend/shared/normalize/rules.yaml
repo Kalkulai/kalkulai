@@ -1,0 +1,16 @@
+hard_filters:
+  uom_compatibility:
+    paint:
+      - l
+      - liter
+    primer:
+      - l
+      - liter
+    tape:
+      - m
+      - meter
+soft_rules:
+  prefer_interior:
+    attribute: innen
+  prefer_water_based:
+    attribute: wasserbasiert
