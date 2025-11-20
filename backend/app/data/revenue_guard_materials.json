@@ -1,0 +1,80 @@
+{
+  "custom": [],
+  "overrides": {
+    "primer_tiefgrund": {
+      "id": "primer_tiefgrund",
+      "name": "Tiefgrund / Grundierung",
+      "keywords": [],
+      "severity": "medium",
+      "category": "Vorarbeiten",
+      "reason": "",
+      "description": "Empfiehlt saugfähige Grundierung, wenn Untergrund oder Positionen keine Haftbrücke enthalten.",
+      "einheit": null,
+      "default_menge": null,
+      "confidence": 0.5,
+      "enabled": true,
+      "editable": true,
+      "origin": "builtin"
+    },
+    "masking_cover": {
+      "id": "masking_cover",
+      "name": "Abdeckmaterial",
+      "keywords": [],
+      "severity": "medium",
+      "category": "Schutz",
+      "reason": "",
+      "description": "Überprüft, ob Folien/Vlies zum Abdecken empfindlicher Bereiche vorgesehen sind.",
+      "einheit": null,
+      "default_menge": null,
+      "confidence": 0.5,
+      "enabled": true,
+      "editable": true,
+      "origin": "builtin"
+    },
+    "masking_tape": {
+      "id": "masking_tape",
+      "name": "Abklebeband / Kreppband",
+      "keywords": [],
+      "severity": "high",
+      "category": "Schutz",
+      "reason": "",
+      "description": "Empfiehlt Kreppband in passenden Rollenlängen relativ zur Kantenmeterzahl.",
+      "einheit": null,
+      "default_menge": null,
+      "confidence": 0.5,
+      "enabled": true,
+      "editable": true,
+      "origin": "builtin"
+    },
+    "scratch_spackle": {
+      "id": "scratch_spackle",
+      "name": "Zwischenspachtelung",
+      "keywords": [],
+      "severity": "medium",
+      "category": "Vorarbeiten",
+      "reason": "",
+      "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder Tapeten vor.",
+      "einheit": null,
+      "default_menge": null,
+      "confidence": 0.5,
+      "enabled": true,
+      "editable": true,
+      "origin": "builtin"
+    },
+    "travel": {
+      "id": "travel",
+      "name": "Anfahrtpauschale",
+      "keywords": [],
+      "severity": "low",
+      "category": "Allgemein",
+      "reason": "",
+      "description": "Stellt sicher, dass Fahrtkosten bzw. Pauschalen eingeplant sind.",
+      "einheit": null,
+      "default_menge": null,
+      "confidence": 0.5,
+      "enabled": true,
+      "editable": true,
+      "origin": "builtin"
+    }
+  }
+}

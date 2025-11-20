@@ -9,7 +9,9 @@ for architecture and tool-chain details.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -21,13 +23,265 @@ from uuid import uuid4
 
 from jinja2 import Environment
 
+from backend.app.error_messages import (
+    chat_unknown_products_message,
+    offer_unknown_products_message,
+)
 from backend.app.uom_convert import harmonize_material_line
 from backend.app.utils import extract_json_array, extract_products_from_output, parse_positions
 from backend.retriever import index_manager
-from backend.retriever.main import rank_main
-from backend.retriever.thin import search_catalog_thin
+from backend.retriever.main import rank_main as default_rank_main
+from backend.retriever.thin import search_catalog_thin as default_search_catalog_thin
 from backend.shared.normalize.text import normalize_query as shared_normalize_query
 from backend.shared.normalize.text import tokenize as shared_tokenize
+
+CATALOG_MATCH_THRESHOLD = 0.45
+VECTOR_MATCH_THRESHOLD = 0.45
+MATERIAL_NAME_SPLIT_RE = re.compile(r"[:\n]")
+
+
+def _run_thin_catalog_search(**kwargs):
+    try:
+        from backend import main as backend_main
+
+        func = getattr(backend_main, "search_catalog_thin", default_search_catalog_thin)
+    except Exception:
+        func = default_search_catalog_thin
+    return func(**kwargs)
+
+
+def _run_rank_main(*args, **kwargs):
+    try:
+        from backend import main as backend_main
+
+        func = getattr(backend_main, "rank_main", default_rank_main)
+    except Exception:
+        func = default_rank_main
+    return func(*args, **kwargs)
+
+
+def _normalize_material_name(name: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return ""
+    parts = MATERIAL_NAME_SPLIT_RE.split(cleaned, 1)
+    cleaned = parts[0].strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def _load_company_catalog_products(company_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    if not company_id:
+        return {}
+    try:
+        from backend.store import catalog_store
+    except Exception:
+        return {}
+
+    try:
+        rows = catalog_store.get_active_products(company_id) or []
+    except Exception:
+        rows = []
+
+    products: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("name") or "").strip().lower()
+        if key:
+            products[key] = row
+    return products
+
+
+def _load_company_synonym_map(company_id: Optional[str]) -> Dict[str, str]:
+    if not company_id:
+        return {}
+    try:
+        from backend.store import catalog_store
+    except Exception:
+        return {}
+
+    try:
+        mapping_raw = catalog_store.list_synonyms(company_id) or {}
+    except Exception:
+        mapping_raw = {}
+
+    synonyms: Dict[str, str] = {}
+    for canon, variants in mapping_raw.items():
+        canon_key = (canon or "").strip().lower()
+        if canon_key:
+            synonyms[canon_key] = canon_key
+        for variant in variants or []:
+            var_key = (variant or "").strip().lower()
+            if var_key:
+                synonyms[var_key] = canon_key or var_key
+    return synonyms
+
+
+def _match_catalog_entry(
+    query: str,
+    ctx: QuoteServiceContext,
+    *,
+    company_id: Optional[str],
+    company_products: Dict[str, Dict[str, Any]],
+    company_synonyms: Dict[str, str],
+) -> Dict[str, Any]:
+    cleaned = _normalize_material_name(query)
+    lower = cleaned.lower()
+    result = {
+        "query": cleaned,
+        "matched": False,
+        "match_type": "",
+        "confidence": 0.0,
+        "canonical_name": None,
+        "sku": None,
+        "suggestions": [],
+    }
+    if not cleaned:
+        return result
+
+    entry = ctx.catalog_by_name.get(lower)
+    if entry:
+        result.update(
+            {
+                "matched": True,
+                "match_type": "direct",
+                "confidence": 1.0,
+                "canonical_name": entry.get("name") or cleaned,
+                "sku": entry.get("sku"),
+            }
+        )
+        return result
+
+    if lower in company_synonyms:
+        canonical_lower = company_synonyms[lower]
+        entry = ctx.catalog_by_name.get(canonical_lower)
+        if entry:
+            result.update(
+                {
+                    "matched": True,
+                    "match_type": "synonym",
+                    "confidence": 0.9,
+                    "canonical_name": entry.get("name") or cleaned,
+                    "sku": entry.get("sku"),
+                }
+            )
+            return result
+
+    for product in company_products.values():
+        product_name = (product.get("name") or "").strip()
+        if not product_name:
+            continue
+        if _material_names_match(cleaned, product_name):
+            result.update(
+                {
+                    "matched": True,
+                    "match_type": "company_db",
+                    "confidence": 0.85,
+                    "canonical_name": product_name,
+                    "sku": product.get("sku"),
+                }
+            )
+            return result
+
+    if lower in company_products:
+        product = company_products[lower]
+        result.update(
+            {
+                "matched": True,
+                "match_type": "company_db",
+                "confidence": 0.85,
+                "canonical_name": product.get("name") or cleaned,
+                "sku": product.get("sku"),
+            }
+        )
+        return result
+
+    hits = _run_thin_catalog_search(
+        query=cleaned,
+        top_k=ctx.catalog_top_k,
+        catalog_items=ctx.catalog_items,
+        synonyms_path=str(ctx.synonyms_path),
+    )
+    suggestions = [h.get("name") for h in hits if h.get("name")]
+    result["suggestions"] = suggestions
+
+    for hit in hits:
+        conf_raw = hit.get("confidence", hit.get("score_final"))
+        try:
+            confidence = float(conf_raw or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence >= VECTOR_MATCH_THRESHOLD:
+            result.update(
+                {
+                    "matched": True,
+                    "match_type": "vector",
+                    "confidence": confidence,
+                    "canonical_name": hit.get("name") or cleaned,
+                    "sku": hit.get("sku"),
+                }
+            )
+            break
+
+    return result
+
+
+def _validate_materials(
+    materials: List[dict],
+    ctx: QuoteServiceContext,
+    *,
+    company_id: Optional[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if not materials:
+        return [], []
+
+    company_products = _load_company_catalog_products(company_id)
+    company_synonyms = _load_company_synonym_map(company_id)
+
+    seen: set[str] = set()
+    results: List[Dict[str, Any]] = []
+    unknown: List[Dict[str, Any]] = []
+
+    for item in materials:
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        match = _match_catalog_entry(
+            name,
+            ctx,
+            company_id=company_id,
+            company_products=company_products,
+            company_synonyms=company_synonyms,
+        )
+        results.append(match)
+        if not match["matched"]:
+            unknown.append(match)
+
+    return results, unknown
+
+
+def _format_unknown_products_reply(unknown_entries: List[Dict[str, Any]]) -> str:
+    if not unknown_entries:
+        return ""
+    lines = [
+        "**Produktprüfung**",
+        "",
+        "Folgende Produkte konnten wir nicht im Katalog finden:",
+    ]
+    for entry in unknown_entries:
+        line = f"- {entry['query']}"
+        suggestions = entry.get("suggestions") or []
+        if suggestions:
+            line += f" (ähnliche Treffer: {', '.join(suggestions[:3])})"
+        lines.append(line)
+    lines.append("")
+    lines.append(
+        "Bitte nennen Sie alternative Produkte aus dem vorhandenen Katalog oder lassen Sie Ihren Innendienst die Datenbank erweitern."
+    )
+    return "\n".join(lines).strip()
 
 
 class ServiceError(Exception):
@@ -85,6 +339,11 @@ MALER_STEPS: List[Dict[str, Any]] = [
     {"key": "abklebeflaeche_m",  "question": "Geschätzte Abklebekanten in Metern? (optional, 0 wenn unbekannt)", "ui": {"type": "number", "min": 0, "max": 1000, "step": 1}},
     {"key": "besonderheiten",    "question": "Gibt es Besonderheiten? (z. B. Schimmel, Nikotin, etc.)",           "ui": {"type": "singleSelect", "options": ["keine","Nikotin","Schimmel","Feuchtraum","Dunkle Altfarbe"]}},
 ]
+
+APP_BASE_DIR = Path(__file__).resolve().parents[1]
+REVENUE_GUARD_CONFIG_PATH = Path(
+    os.getenv("REVENUE_GUARD_CONFIG", str(APP_BASE_DIR / "data" / "revenue_guard_materials.json"))
+)
 
 
 def reset_session(*, ctx: QuoteServiceContext, reason: Optional[str] = None) -> Dict[str, Any]:
@@ -209,7 +468,7 @@ def _score_entry(query: str, entry: Dict[str, Any]) -> float:
 
 
 def _catalog_lookup(query: str, limit: int, ctx: QuoteServiceContext) -> List[Dict[str, Any]]:
-    if not query or ctx.retriever is None:
+    if not query:
         return []
 
     top_k = min(limit, ctx.catalog_top_k)
@@ -244,6 +503,9 @@ def _catalog_lookup(query: str, limit: int, ctx: QuoteServiceContext) -> List[Di
         ]
         ctx.catalog_search_cache[key] = (now, results)
         return results
+
+    if ctx.retriever is None:
+        return []
 
     try:
         docs = ctx.retriever.get_relevant_documents(query)[: max(top_k * 2, top_k)]  # type: ignore[union-attr]
@@ -441,7 +703,7 @@ def _build_catalog_candidates(items: List[dict], ctx: QuoteServiceContext) -> Li
         seen_queries.add(key)
 
         try:
-            raw_hits = search_catalog_thin(
+            raw_hits = _run_thin_catalog_search(
                 query=query,
                 top_k=ctx.catalog_top_k,
                 catalog_items=ctx.catalog_items,
@@ -649,10 +911,12 @@ Du bist Malermeister. Schätze den Materialbedarf in **Basis-Einheiten** (kg, L,
 
 Heuristiken:
 - Dispersionsfarbe: 1 L / 10 m² **pro Schicht** + 10 % Reserve (Wände/Decken).
-- Tiefgrund: 1 L / 15 m² (bei saugendem Untergrund wie Putz/Beton).
+- Tiefgrund: 1 L / 10 m² (bei saugendem Untergrund wie Putz/Beton).
 - Abdeckfolie (4×5 m ≈ 20 m²/Rolle): ~1 Rolle / 40 m² begeh-/bewohnter Fläche.
 - Abklebeband: ~1 Rolle / 25 m Kanten/Anschlüsse (Standardraum grob 1 Rolle/Raum).
 - Nur sinnvolle Verbrauchsmaterialien aufführen.
+
+Alle genannten Verbrauchswerte müssen zur berechneten Menge passen (z. B. 0,1 L/m² × 20 m² = 2 L).
 
 GIB NUR DEN MASCHINENANHANG AUS – keine Einleitung, kein Markdown:
 ---
@@ -740,7 +1004,7 @@ def rule_primer_tiefgrund(positions: list[dict], ctx_dict: dict) -> Tuple[bool, 
         "name": "Tiefgrund / Grundierung",
         "menge": max(1.0, liter),
         "einheit": "L",
-        "reason": f"Untergrund {ctx_dict.get('untergrund')} → Tiefgrund (≈1 L / 15 m²).",
+        "reason": f"Untergrund {ctx_dict.get('untergrund')} → Tiefgrund (≈1 L / 10 m²).",
         "confidence": 0.7,
         "severity": "high",
         "category": "Vorarbeiten",
@@ -842,6 +1106,336 @@ REVENUE_RULES = [
     ("scratch_spackle", "Spachtelarbeiten (Kratz-/Zwischenspachtelung) fehlen?", rule_scratch_spackle),
     ("travel", "Anfahrtpauschale fehlt?", rule_travel),
 ]
+
+BUILTIN_GUARD_ITEMS: List[Dict[str, Any]] = [
+    {
+        "id": "primer_tiefgrund",
+        "name": "Tiefgrund / Grundierung",
+        "severity": "medium",
+        "category": "Vorarbeiten",
+        "description": "Empfiehlt saugfähige Grundierung, wenn Untergrund oder Positionen keine Haftbrücke enthalten.",
+        "editable": True,
+    },
+    {
+        "id": "masking_cover",
+        "name": "Abdeckmaterial",
+        "severity": "medium",
+        "category": "Schutz",
+        "description": "Überprüft, ob Folien/Vlies zum Abdecken empfindlicher Bereiche vorgesehen sind.",
+        "editable": True,
+    },
+    {
+        "id": "masking_tape",
+        "name": "Abklebeband / Kreppband",
+        "severity": "high",
+        "category": "Schutz",
+        "description": "Empfiehlt Kreppband in passenden Rollenlängen relativ zur Kantenmeterzahl.",
+        "editable": True,
+    },
+    {
+        "id": "scratch_spackle",
+        "name": "Zwischenspachtelung",
+        "severity": "medium",
+        "category": "Vorarbeiten",
+        "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder Tapeten vor.",
+        "editable": True,
+    },
+    {
+        "id": "travel",
+        "name": "Anfahrtpauschale",
+        "severity": "low",
+        "category": "Allgemein",
+        "description": "Stellt sicher, dass Fahrtkosten bzw. Pauschalen eingeplant sind.",
+        "editable": True,
+    },
+]
+
+BUILTIN_ID_MAP: Dict[str, Dict[str, Any]] = {item["id"]: item for item in BUILTIN_GUARD_ITEMS}
+GUARD_CONFIG_CACHE: Dict[str, Any] | None = None
+
+
+def _ensure_guard_config_dir() -> None:
+    REVENUE_GUARD_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _guard_config_defaults() -> Dict[str, Any]:
+    return {"custom": [], "overrides": {}}
+
+
+def _load_guard_config() -> Dict[str, Any]:
+    global GUARD_CONFIG_CACHE
+    if GUARD_CONFIG_CACHE is not None:
+        return GUARD_CONFIG_CACHE
+
+    if not REVENUE_GUARD_CONFIG_PATH.exists():
+        GUARD_CONFIG_CACHE = _guard_config_defaults()
+        return GUARD_CONFIG_CACHE
+
+    try:
+        data = json.loads(REVENUE_GUARD_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except (json.JSONDecodeError, OSError):
+        data = {}
+
+    if isinstance(data, list):
+        raw_custom = data
+        raw_overrides: Dict[str, Any] = {}
+    else:
+        raw_custom = data.get("custom") or []
+        raw_overrides = data.get("overrides") or {}
+        if isinstance(raw_overrides, list):
+            raw_overrides = {str(entry.get("id")): entry for entry in raw_overrides if entry}
+
+    custom_items: List[Dict[str, Any]] = []
+    for entry in raw_custom:
+        try:
+            custom_items.append(_normalize_guard_item(entry, require_keywords=True))
+        except ServiceError:
+            continue
+
+    overrides: Dict[str, Dict[str, Any]] = {}
+    for oid, entry in raw_overrides.items():
+        if not oid:
+            continue
+        try:
+            overrides[oid] = _normalize_builtin_override({**entry, "id": oid})
+        except ServiceError:
+            continue
+
+    GUARD_CONFIG_CACHE = {"custom": custom_items, "overrides": overrides}
+    return GUARD_CONFIG_CACHE
+
+
+def _write_guard_config(custom_items: List[Dict[str, Any]], overrides: Dict[str, Dict[str, Any]]) -> None:
+    _ensure_guard_config_dir()
+    payload = {"custom": custom_items, "overrides": overrides}
+    REVENUE_GUARD_CONFIG_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    global GUARD_CONFIG_CACHE
+    GUARD_CONFIG_CACHE = {"custom": custom_items, "overrides": overrides}
+
+
+def _normalize_guard_item(raw: Dict[str, Any], *, require_keywords: bool) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ServiceError("Guard-Item muss ein Objekt sein.", status_code=400)
+
+    item_id = str(raw.get("id") or f"custom_{uuid4().hex[:8]}")
+    name = (raw.get("name") or "").strip()
+    if not name:
+        raise ServiceError("Guard-Item benötigt einen Namen.", status_code=400)
+
+    keywords_raw = raw.get("keywords")
+    if isinstance(keywords_raw, str):
+        keywords = [keywords_raw]
+    else:
+        keywords = keywords_raw or []
+    keywords = [str(k).strip().lower() for k in keywords if str(k).strip()]
+    if require_keywords and not keywords:
+        raise ServiceError(f"Guard-Item '{name}' benötigt mindestens ein Schlüsselwort.", status_code=400)
+
+    severity = (raw.get("severity") or "medium").lower()
+    if severity not in {"low", "medium", "high"}:
+        raise ServiceError("severity muss 'low', 'medium' oder 'high' sein.", status_code=400)
+
+    halb_menge = raw.get("default_menge")
+    default_menge: float | None
+    if halb_menge in (None, ""):
+        default_menge = None
+    else:
+        try:
+            default_menge = float(halb_menge)
+        except (TypeError, ValueError):
+            raise ServiceError("default_menge muss eine Zahl sein.", status_code=400) from None
+
+    confidence_raw = raw.get("confidence", 0.5)
+    try:
+        confidence_val = float(confidence_raw)
+    except (TypeError, ValueError):
+        confidence_val = 0.5
+    confidence_val = max(0.0, min(1.0, confidence_val))
+
+    return {
+        "id": item_id,
+        "name": name,
+        "keywords": keywords,
+        "severity": severity,
+        "category": (raw.get("category") or "Benutzerdefiniert").strip() or "Benutzerdefiniert",
+        "reason": (raw.get("reason") or "").strip(),
+        "description": (raw.get("description") or "").strip(),
+        "einheit": (raw.get("einheit") or "").strip() or None,
+        "default_menge": default_menge,
+        "confidence": confidence_val,
+        "enabled": bool(raw.get("enabled", True)),
+        "editable": bool(raw.get("editable", True)),
+        "origin": raw.get("origin"),
+    }
+
+
+def _normalize_custom_guard_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+    item = _normalize_guard_item(raw, require_keywords=True)
+    item["origin"] = "custom"
+    return item
+
+
+def _load_custom_guard_items() -> List[Dict[str, Any]]:
+    config = _load_guard_config()
+    return [dict(item) for item in config["custom"]]
+
+
+def _load_builtin_overrides() -> Dict[str, Dict[str, Any]]:
+    return dict(_load_guard_config()["overrides"])
+
+
+def _normalize_builtin_override(raw: Dict[str, Any]) -> Dict[str, Any]:
+    item_id = str(raw.get("id") or "").strip()
+    if not item_id or item_id not in BUILTIN_ID_MAP:
+        raise ServiceError("Ungültige builtin-id für Guard-Override.", status_code=400)
+    item = _normalize_guard_item(raw, require_keywords=False)
+    item["id"] = item_id
+    item["origin"] = "builtin"
+    return item
+
+
+def _resolved_builtin_guard_items() -> List[Dict[str, Any]]:
+    overrides = _load_builtin_overrides()
+    resolved: List[Dict[str, Any]] = []
+    for base in BUILTIN_GUARD_ITEMS:
+        override = overrides.get(base["id"])
+        merged = dict(base)
+        if override:
+            merged.update(override)
+        merged["origin"] = "builtin"
+        resolved.append(merged)
+    return resolved
+
+
+def _resolved_custom_guard_items() -> List[Dict[str, Any]]:
+    custom_items = []
+    for item in _load_custom_guard_items():
+        entry = dict(item)
+        entry["origin"] = "custom"
+        custom_items.append(entry)
+    return custom_items
+
+
+def _all_guard_items() -> List[Dict[str, Any]]:
+    return _resolved_builtin_guard_items() + _resolved_custom_guard_items()
+
+
+def _positions_cover_keywords(positions: List[Dict[str, Any]], keywords: List[str]) -> bool:
+    tokens = [kw.lower() for kw in keywords if kw]
+    if not tokens:
+        return True
+
+    for pos in positions:
+        combined = " ".join(
+            str(val or "")
+            for val in (
+                pos.get("name"),
+                pos.get("text"),
+                pos.get("beschreibung"),
+                pos.get("category"),
+            )
+        ).lower()
+        if any(token in combined for token in tokens):
+            return True
+    return False
+
+
+def _evaluate_custom_guard_rules(
+    positions: List[Dict[str, Any]],
+    ctx_dict: Dict[str, Any],  # noqa: ARG001 - reserved for future extensions
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    missing: List[Dict[str, Any]] = []
+    fired: List[Dict[str, Any]] = []
+
+    for entry in _load_custom_guard_items():
+        enabled = bool(entry.get("enabled", True))
+        matches = _positions_cover_keywords(positions, entry.get("keywords", []))
+        hit = enabled and not matches
+        fired.append(
+            {
+                "id": entry["id"],
+                "label": entry.get("name"),
+                "hit": hit,
+                "explanation": entry.get("description") or entry.get("reason") or "",
+            }
+        )
+        if not hit:
+            continue
+        missing.append(
+            {
+                "id": entry["id"],
+                "name": entry["name"],
+                "menge": entry.get("default_menge"),
+                "einheit": entry.get("einheit"),
+                "reason": entry.get("reason") or "Gemäß benutzerdefinierter Vorgabe erforderlich.",
+                "confidence": entry.get("confidence", 0.5),
+                "severity": entry.get("severity", "medium"),
+                "category": entry.get("category") or "Benutzerdefiniert",
+            }
+        )
+
+    return missing, fired
+
+
+def get_revenue_guard_materials() -> Dict[str, Any]:
+    """
+    Return builtin guard information and custom definitions for UI consumption.
+    """
+    resolved = _all_guard_items()
+    return {"items": resolved}
+
+
+def save_revenue_guard_materials(*, payload: Dict[str, Any]) -> Dict[str, Any]:
+    items_payload = payload.get("items")
+    if items_payload is None:
+        # Legacy payload (custom-only)
+        candidates = payload.get("custom")
+        if candidates is None:
+            raise ServiceError("Feld 'items' fehlt oder ist ungültig.", status_code=400)
+        if not isinstance(candidates, list):
+            raise ServiceError("'custom' muss eine Liste sein.", status_code=400)
+        normalized_custom = [_normalize_custom_guard_item(entry) for entry in candidates]
+        _write_guard_config(normalized_custom, {})
+        return {"items": _all_guard_items()}
+
+    if not isinstance(items_payload, list):
+        raise ServiceError("'items' muss eine Liste sein.", status_code=400)
+
+    custom_items: List[Dict[str, Any]] = []
+    overrides: Dict[str, Dict[str, Any]] = {}
+    seen_ids: set[str] = set()
+    for entry in items_payload:
+        if not isinstance(entry, dict):
+            raise ServiceError("Ungültiges Guard-Item (kein Objekt).", status_code=400)
+        item_id = str(entry.get("id") or "")
+        if item_id in seen_ids and item_id not in BUILTIN_ID_MAP:
+            raise ServiceError(f"Doppelte Guard-ID '{item_id}' erkannt.", status_code=400)
+        if item_id in BUILTIN_ID_MAP:
+            overrides[item_id] = _normalize_builtin_override(entry)
+        else:
+            normalized = _normalize_custom_guard_item(entry)
+            seen_ids.add(normalized["id"])
+            custom_items.append(normalized)
+
+    _write_guard_config(custom_items, overrides)
+    return {"items": _all_guard_items()}
+
+
+def _apply_builtin_override_to_suggestion(
+    suggestion: Dict[str, Any],
+    override: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not override:
+        return suggestion
+    merged = dict(suggestion)
+    for field in ("name", "reason", "category", "einheit", "severity", "confidence"):
+        val = override.get(field)
+        if val not in (None, ""):
+            merged[field] = val
+    if override.get("default_menge") not in (None, ""):
+        merged["menge"] = override["default_menge"]
+    return merged
+
 def search_catalog(
     *,
     query: str,
@@ -858,13 +1452,8 @@ def search_catalog(
     if company_id:
         results = _company_catalog_search(company_id, query, limit, ctx)
     else:
-        if ctx.retriever is None:
-            raise ServiceError(
-                "Katalogsuche aktuell nicht verfügbar (Retriever nicht initialisiert).",
-                status_code=503,
-            )
         try:
-            hits = search_catalog_thin(
+            hits = _run_thin_catalog_search(
                 query=query,
                 top_k=limit,
                 catalog_items=ctx.catalog_items,
@@ -886,6 +1475,21 @@ def search_catalog(
         except Exception as exc:
             ctx.logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
             results = _catalog_lookup(query, limit, ctx)
+            if not results and ctx.catalog_items:
+                fallback_entries = ctx.catalog_items[:limit]
+                results = [
+                    {
+                        "sku": item.get("sku"),
+                        "name": item.get("name"),
+                        "unit": item.get("unit"),
+                        "pack_sizes": item.get("pack_sizes"),
+                        "synonyms": item.get("synonyms") or [],
+                        "category": item.get("category"),
+                        "brand": item.get("brand"),
+                        "confidence": 0.3,
+                    }
+                    for item in fallback_entries
+                ]
 
     took = int((time.time() - started) * 1000)
     ctx.logger.info(
@@ -954,12 +1558,24 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
     if not ready and has_machine_block:
         ready = True
 
+    lookup_materials = materials_in_reply
+    if not lookup_materials and ctx.memory1 is not None:
+        hist_lookup = ctx.memory1.load_memory_variables({}).get("chat_history", "")
+        lookup_materials = _extract_materials_from_text_any(hist_lookup)
+
+    if lookup_materials:
+        _, unknown_entries = _validate_materials(
+            lookup_materials,
+            ctx,
+            company_id=ctx.default_company_id,
+        )
+        if unknown_entries:
+            reply_text = _format_unknown_products_reply(unknown_entries)
+            display_text = reply_text.strip()
+            return {"reply": display_text, "ready_for_offer": False}
+
     catalog_candidates: List[Dict[str, Any]] = []
-    if ctx.llm1_thin_retrieval:
-        lookup_materials = materials_in_reply
-        if not lookup_materials:
-            hist = ctx.memory1.load_memory_variables({}).get("chat_history", "")
-            lookup_materials = _extract_materials_from_text_any(hist)
+    if ctx.llm1_thin_retrieval and lookup_materials:
         if lookup_materials:
             catalog_candidates = _build_catalog_candidates(lookup_materials, ctx)
             if catalog_candidates:
@@ -990,6 +1606,181 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
                     ctx.memory1.chat_memory.add_ai_message(catalog_block)  # type: ignore[union-attr]
                 except Exception:
                     pass
+
+    display_text = _strip_machine_sections(reply_text) or reply_text.strip()
+    followup_prompt = "Passen die Mengen so oder wünschen Sie Änderungen?"
+    if not (bot_confirms or user_confirms):
+        if followup_prompt.lower() not in display_text.lower():
+            display_text = (display_text.rstrip() + ("\n\n" if display_text else "") + followup_prompt).strip()
+
+    return {"reply": display_text, "ready_for_offer": ready}
+
+
+def _thin_catalog_hits(query: str, ctx: QuoteServiceContext, top_k: int = 3) -> List[Dict[str, Any]]:
+    query = (query or "").strip()
+    if not query:
+        return []
+    try:
+        hits = _run_thin_catalog_search(
+            query=query,
+            top_k=max(1, min(top_k, ctx.catalog_top_k)),
+            catalog_items=ctx.catalog_items,
+            synonyms_path=str(ctx.synonyms_path),
+        )
+    except Exception as exc:
+        ctx.logger.warning("Thin retrieval failed for %s: %s", query, exc)
+        hits = []
+    return hits
+
+
+_COLON_SUFFIX_PREFIXES = (
+    "noch",
+    "nutzer",
+    "kunde",
+    "status",
+    "reserve",
+    "annahme",
+    "verbrauch",
+    "bedarf",
+    "menge",
+    "update",
+    "hinweis",
+    "schicht",
+    "pro ",
+    "info",
+)
+_PAREN_SUFFIX_KEYWORDS = (
+    "nutzervorgabe",
+    "kundenvorgabe",
+    "reserve",
+    "status",
+    "update",
+    "annahme",
+    "hinweis",
+)
+
+
+def _strip_colon_suffix(value: str) -> str:
+    text = value.strip()
+    if ":" not in text:
+        return text
+    head, tail = text.split(":", 1)
+    normalized_tail = tail.strip().lower()
+    if not normalized_tail:
+        return head.strip()
+    first = normalized_tail[0]
+    if first.isdigit() or first in "+-(":
+        return head.strip()
+    for prefix in _COLON_SUFFIX_PREFIXES:
+        if normalized_tail.startswith(prefix):
+            return head.strip()
+    return text.strip()
+
+
+def _strip_parenthetical_suffix(value: str) -> str:
+    text = value.strip()
+    while True:
+        match = re.search(r"\s*\(([^)]*)\)\s*$", text)
+        if not match:
+            break
+        inner = (match.group(1) or "").strip().lower()
+        if not inner or any(keyword in inner for keyword in _PAREN_SUFFIX_KEYWORDS):
+            text = text[: match.start()].rstrip()
+            continue
+        break
+    return text.strip()
+
+
+def _material_lookup_variants(name: str) -> List[str]:
+    base = (name or "").strip()
+    if not base:
+        return []
+    variants: List[str] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str) -> None:
+        cleaned = re.sub(r"\s+", " ", candidate.strip("•-–—· ")).strip().rstrip(".,;:-")
+        if cleaned:
+            key = cleaned.lower()
+            if key not in seen:
+                variants.append(cleaned)
+                seen.add(key)
+
+    _add(base)
+    no_colon = _strip_colon_suffix(base)
+    _add(no_colon)
+    no_paren = _strip_parenthetical_suffix(no_colon)
+    _add(no_paren)
+    generic_trim = re.sub(r"\s*\([^)]*\)\s*$", "", no_colon).strip()
+    if generic_trim:
+        _add(generic_trim)
+    extras = list(variants)
+    for existing in extras:
+        for sep in (",", ";"):
+            if sep in existing:
+                head = existing.split(sep, 1)[0].strip()
+                if head:
+                    _add(head)
+    return variants
+
+
+def _material_names_match(lhs: str, rhs: str) -> bool:
+    if not lhs or not rhs:
+        return False
+    left_variants = {v.lower() for v in _material_lookup_variants(lhs)} or {lhs.strip().lower()}
+    right_variants = {v.lower() for v in _material_lookup_variants(rhs)} or {rhs.strip().lower()}
+    return bool(left_variants & right_variants)
+
+
+def _build_catalog_synonym_map(ctx: QuoteServiceContext) -> Dict[str, Dict[str, Any]]:
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for entry in ctx.catalog_items:
+        for syn in entry.get("synonyms") or []:
+            syn_key = (syn or "").strip().lower()
+            if syn_key and syn_key not in mapping:
+                mapping[syn_key] = entry
+    return mapping
+
+
+def _resolve_catalog_entry_from_name(
+    raw_name: str,
+    ctx: QuoteServiceContext,
+) -> Tuple[bool, Optional[Dict[str, Any]], List[str]]:
+    variants = _material_lookup_variants(raw_name)
+    if not variants:
+        return False, None, []
+    suggestions: List[str] = []
+    synonym_index = _build_catalog_synonym_map(ctx)
+    for variant in variants:
+        key = variant.lower()
+        if not key:
+            continue
+        entry = ctx.catalog_by_name.get(key) or synonym_index.get(key)
+        if entry:
+            return True, entry, []
+        hits = _thin_catalog_hits(variant, ctx, top_k=3)
+        if hits and not suggestions:
+            suggestions = [h.get("name") for h in hits if h.get("name")]
+        for hit in hits:
+            conf_raw = hit.get("confidence", hit.get("score_final"))
+            try:
+                confidence = float(conf_raw or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < CATALOG_MATCH_THRESHOLD:
+                continue
+            sku = (hit.get("sku") or "").strip()
+            if sku:
+                entry = ctx.catalog_by_sku.get(sku)
+                if entry:
+                    return True, entry, suggestions
+            hit_name = (hit.get("name") or "").strip().lower()
+            if hit_name:
+                entry = ctx.catalog_by_name.get(hit_name)
+                if entry:
+                    return True, entry, suggestions
+    return False, None, suggestions
+
 
     display_text = _strip_machine_sections(reply_text) or reply_text.strip()
     followup_prompt = "Passen die Mengen so oder wünschen Sie Änderungen?"
@@ -1046,6 +1837,8 @@ def generate_offer_positions(
         return ctx_lines
 
     products_from_message = extract_products_from_output(message) if message else []
+    hist_for_catalog = ctx.memory1.load_memory_variables({}).get("chat_history", "") if ctx.memory1 else ""
+    latest_items = _extract_last_machine_items(hist_for_catalog, prefer_status="bestätigt") or _extract_last_machine_items(hist_for_catalog)
     if products and isinstance(products, list) and all(isinstance(x, str) for x in products):
         chosen_products = [p.strip() for p in products if p and isinstance(p, str)]
     elif products_from_message:
@@ -1053,7 +1846,7 @@ def generate_offer_positions(
     else:
         if ctx.memory1 is None:
             raise ServiceError("No context. Provide 'message' or call /api/chat first.", status_code=400)
-        hist = ctx.memory1.load_memory_variables({}).get("chat_history", "")
+        hist = hist_for_catalog
         if not hist and not message:
             raise ServiceError("No context. Provide 'message' or call /api/chat first.", status_code=400)
         if message:
@@ -1061,6 +1854,8 @@ def generate_offer_positions(
                 raise ServiceError("Chat-Funktion (LLM1) aktuell deaktiviert.", status_code=503)
             _ = ctx.chain1.run(human_input=message)
             hist = ctx.memory1.load_memory_variables({}).get("chat_history", "")
+            hist_for_catalog = hist
+            latest_items = _extract_last_machine_items(hist_for_catalog, prefer_status="bestätigt") or _extract_last_machine_items(hist_for_catalog)
         last = hist.split("Assistent:")[-1] if "Assistent:" in hist else hist
         chosen_products = extract_products_from_output(last)
         if not chosen_products:
@@ -1069,26 +1864,77 @@ def generate_offer_positions(
                 status_code=400,
             )
 
-    hist_for_catalog = ctx.memory1.load_memory_variables({}).get("chat_history", "") if ctx.memory1 else ""
+    if not products and latest_items:
+        chosen_products_from_state = [(item.get("name") or "").strip() for item in latest_items if item.get("name")]
+        if chosen_products_from_state:
+            chosen_products = chosen_products_from_state
+
+    company_for_validation = company_id or ctx.default_company_id
+    validation_results, validation_unknown = _validate_materials(
+        [{"name": name} for name in chosen_products],
+        ctx,
+        company_id=company_for_validation,
+    )
+    if validation_unknown:
+        detail = {
+            "error": "unknown_products",
+            "unknown_products": [entry["query"] for entry in validation_unknown],
+            "message": offer_unknown_products_message([entry["query"] for entry in validation_unknown]),
+        }
+        raise ServiceError(detail, status_code=400)
+    match_lookup = {
+        (res["query"] or "").strip().lower(): res
+        for res in validation_results
+        if res.get("matched")
+    }
+
     catalog_memory_map = _extract_catalog_map(hist_for_catalog)
     normalized_pairs: List[Tuple[str, str, Optional[str]]] = []
-    normalized_lookup: Dict[str, Tuple[str, Optional[str]]] = {}
     for original in chosen_products:
         info = catalog_memory_map.get((original or "").lower())
         canonical = info.get("canonical_name") if info else None
         sku = info.get("matched_sku") if info else None
-        canonical_name = canonical or original
+        match = match_lookup.get((original or "").strip().lower())
+        canonical_name = match.get("canonical_name") if match else canonical or original
+        sku = match.get("sku") if match and match.get("sku") else sku
         normalized_pairs.append((original, canonical_name, sku))
-        normalized_lookup[original.strip().lower()] = (canonical_name, sku)
+
+    updated_pairs: List[Tuple[str, str, Optional[str]]] = []
+    for original, canonical_name, sku in normalized_pairs:
+        new_canonical = canonical_name
+        new_sku = sku
+        if not new_sku and new_canonical:
+            matched, entry, _ = _resolve_catalog_entry_from_name(new_canonical, ctx)
+            if matched and entry:
+                new_canonical = entry.get("name") or new_canonical
+                new_sku = entry.get("sku") or new_sku
+        updated_pairs.append((original, new_canonical, new_sku))
+    normalized_pairs = updated_pairs
+
+    normalized_lookup: Dict[str, Tuple[str, Optional[str]]] = {}
+    for original, canonical_name, sku in normalized_pairs:
+        normalized_lookup[(original or "").strip().lower()] = (canonical_name, sku)
 
     normalized_names = [pair[1] for pair in normalized_pairs]
     matched_skus = [pair[2] for pair in normalized_pairs if pair[2]]
     chosen_products = normalized_names
 
+    if company_id and ctx.retriever is not None and normalized_names:
+        try:
+            _run_rank_main(
+                normalized_names[0],
+                ctx.retriever,
+                top_k=1,
+                business_cfg=business_cfg,
+                company_id=company_id,
+            )
+        except Exception as exc:
+            ctx.logger.debug("Pre-priming rank_main failed: %s", exc)
+
     ctx_lines = find_exact_catalog_lines(normalized_names, matched_skus)
     if not ctx_lines and not matched_skus and normalized_names and ctx.retriever is not None:
         try:
-            rerank = rank_main(
+            rerank = _run_rank_main(
                 normalized_names[0],
                 ctx.retriever,
                 top_k=1,
@@ -1142,12 +1988,11 @@ def generate_offer_positions(
 
     if latest_items:
         def _find_existing(target: str) -> Optional[dict]:
-            key = (target or "").strip().lower()
             for pos in positions:
-                pname = (pos.get("name") or "").strip().lower()
+                pname = (pos.get("name") or "").strip()
                 if not pname:
                     continue
-                if pname == key or pname in key or key in pname:
+                if _material_names_match(target, pname):
                     return pos
             return None
 
@@ -1155,11 +2000,18 @@ def generate_offer_positions(
             name = (item.get("name") or "").strip()
             if not name:
                 continue
-            if _find_existing(name):
-                continue
             lookup_key = name.lower()
+            canonical_name = name
+            canonical_sku = None
             if lookup_key in normalized_lookup:
-                name = normalized_lookup[lookup_key][0]
+                canonical_name, canonical_sku = normalized_lookup[lookup_key]
+            else:
+                matched, entry, _ = _resolve_catalog_entry_from_name(name, ctx)
+                if matched and entry:
+                    canonical_name = entry.get("name") or canonical_name
+                    canonical_sku = entry.get("sku") or canonical_sku
+            name = canonical_name
+            existing = _find_existing(name)
             raw_qty = item.get("menge") or 0
             einheit = item.get("einheit") or ""
             try:
@@ -1167,6 +2019,15 @@ def generate_offer_positions(
             except (TypeError, ValueError):
                 menge_float = 0.0
             menge_value = int(menge_float) if menge_float.is_integer() else round(menge_float, 3)
+            if existing:
+                if menge_float > 0:
+                    existing["menge"] = menge_value
+                    existing["gesamtpreis"] = round(float(existing.get("epreis", 0)) * float(existing["menge"]), 2)
+                if einheit:
+                    existing["einheit"] = einheit
+                if canonical_sku and not existing.get("matched_sku"):
+                    existing["matched_sku"] = canonical_sku
+                continue
             new_pos = {
                 "nr": len(positions) + 1,
                 "name": name,
@@ -1175,6 +2036,8 @@ def generate_offer_positions(
                 "epreis": 0.0,
                 "gesamtpreis": 0.0,
             }
+            if canonical_sku:
+                new_pos["matched_sku"] = canonical_sku
             positions.append(new_pos)
 
     if ctx.retriever is not None:
@@ -1185,7 +2048,7 @@ def generate_offer_positions(
             if not query_name:
                 continue
             try:
-                ranked = rank_main(
+                ranked = _run_rank_main(
                     query_name,
                     ctx.retriever,
                     top_k=5,
@@ -1228,8 +2091,15 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
         raise ServiceError("positions[] required", status_code=400)
 
     for p in positions:
-        if "gesamtpreis" not in p:
-            p["gesamtpreis"] = round(float(p["menge"]) * float(p["epreis"]), 2)
+        try:
+            menge_val = float(p.get("menge", 0))
+        except (TypeError, ValueError):
+            menge_val = 0.0
+        try:
+            epreis_val = float(p.get("epreis", 0))
+        except (TypeError, ValueError):
+            epreis_val = 0.0
+        p["gesamtpreis"] = round(menge_val * epreis_val, 2)
 
     netto = round(sum(float(p["gesamtpreis"]) for p in positions), 2)
     ust = round(netto * ctx.vat_rate, 2)
@@ -1342,6 +2212,7 @@ def run_revenue_guard(*, payload: Dict[str, Any], debug: bool = False) -> Dict[s
     if not isinstance(positions, list):
         raise ServiceError("positions[] required (array)", status_code=400)
 
+    override_map = _load_builtin_overrides()
     missing, rules_fired = [], []
     for rid, label, fn in REVENUE_RULES:
         try:
@@ -1350,9 +2221,20 @@ def run_revenue_guard(*, payload: Dict[str, Any], debug: bool = False) -> Dict[s
             hit, suggestion = False, None
             if debug:
                 print(f"[revenue-guard] Rule {rid} error:", exc)
-        rules_fired.append({"id": rid, "label": label, "hit": bool(hit), "explanation": ""})
+        override = override_map.get(rid)
+        explanation = ""
+        if override:
+            explanation = override.get("description") or override.get("reason") or ""
+            if not override.get("enabled", True):
+                hit = False
+        rules_fired.append({"id": rid, "label": label, "hit": bool(hit), "explanation": explanation})
         if hit and suggestion:
-            missing.append(suggestion)
+            adjusted = _apply_builtin_override_to_suggestion(suggestion, override)
+            missing.append(adjusted)
+
+    custom_missing, custom_rules = _evaluate_custom_guard_rules(positions, ctx_dict)
+    missing.extend(custom_missing)
+    rules_fired.extend(custom_rules)
 
     passed = not any(s["severity"] in ("high", "medium") for s in missing)
     return {"passed": passed, "missing": missing, "rules_fired": rules_fired}

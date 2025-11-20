@@ -14,7 +14,8 @@ except ImportError:  # Fallback to sqlite3
 
     _HAS_SQLMODEL = False
 
-DB_URL = os.getenv("KALKULAI_DB_URL") or os.getenv("DB_URL", "sqlite:///backend/var/kalkulai.db")
+_PRIMARY_DB_URL = os.getenv("DB_URL")
+DB_URL = _PRIMARY_DB_URL or os.getenv("KALKULAI_DB_URL") or "sqlite:///backend/var/kalkulai.db"
 _engine = None
 _engine_url = None
 

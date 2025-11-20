@@ -15,6 +15,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
 import DatabaseManager from "@/components/DatabaseManager";
+import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
 
 import type {
   RevenueGuardResponse,
@@ -52,6 +53,7 @@ const KalkulaiInterface = () => {
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
   const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const [guardRefreshKey, setGuardRefreshKey] = useState(0);
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -147,6 +149,12 @@ const KalkulaiInterface = () => {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (isSettingsDialogOpen) {
+      setGuardRefreshKey((key) => key + 1);
+    }
+  }, [isSettingsDialogOpen]);
 
   // Helper: Section bauen (mit id/ts)
   const mkSection = (s: Omit<UiSection, "id" | "ts">): UiSection => ({
@@ -781,7 +789,7 @@ const KalkulaiInterface = () => {
       </Dialog>
 
       <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
-        <DialogContent className="max-w-3xl space-y-6">
+        <DialogContent className="max-w-3xl space-y-6 max-h-[85vh] overflow-y-auto">
           <DialogHeader className="space-y-1 text-left">
             <DialogTitle>Einstellungen</DialogTitle>
             <DialogDescription>
@@ -789,9 +797,10 @@ const KalkulaiInterface = () => {
             </DialogDescription>
           </DialogHeader>
           <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="overview">Übersicht</TabsTrigger>
               <TabsTrigger value="database">Datenbank</TabsTrigger>
+              <TabsTrigger value="guard">Vergessener Wächter</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="mt-4 space-y-3">
               {settingsCategories.map((category) => (
@@ -806,6 +815,9 @@ const KalkulaiInterface = () => {
             </TabsContent>
             <TabsContent value="database" className="mt-4">
               <DatabaseManager />
+            </TabsContent>
+            <TabsContent value="guard" className="mt-4 max-h-[65vh] overflow-y-auto pr-1">
+              <GuardMaterialsEditor refreshSignal={guardRefreshKey} />
             </TabsContent>
           </Tabs>
           <DialogFooter className="sm:justify-between">

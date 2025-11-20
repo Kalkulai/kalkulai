@@ -9,6 +9,8 @@ from typing import Any, Dict
 import pytest
 from jinja2 import Environment
 
+import backend.app.services.quote_service as qs
+import backend.app.services.quote_service as qs
 from backend.app.services.quote_service import (
     QuoteServiceContext,
     ServiceError,
@@ -143,11 +145,26 @@ def test_chat_turn_sets_ready_flag(tmp_path):
         "Gerne!\n---\nstatus: bestätigt\nmaterialien:\n"
         "- name=Dispersionsfarbe, menge=10, einheit=L\n---"
     )
+    entry = {
+        "sku": "sku-xyz",
+        "name": "Dispersionsfarbe",
+        "unit": "L",
+        "pack_sizes": ["10L"],
+        "synonyms": ["Innenfarbe"],
+        "category": "Farbe",
+        "brand": "Test",
+        "description": "Farbton",
+        "raw": "Produkt: Dispersionsfarbe 10L",
+    }
     ctx = make_context(
         tmp_path,
         chain1=FakeChain(reply),
         memory1=FakeMemory(),
         llm1_thin_retrieval=False,
+        catalog_entry=entry,
+        catalog_items=[entry],
+        catalog_by_name={entry["name"].lower(): entry},
+        catalog_by_sku={entry["sku"]: entry},
     )
     result = chat_turn(message="Bitte Angebot", ctx=ctx)
 
@@ -182,6 +199,121 @@ def test_generate_offer_positions_without_context_raises(tmp_path):
     assert exc.value.status_code == 400
 
 
+def test_generate_offer_positions_accepts_annotated_products(tmp_path):
+    llm_response = '[{"nr": 1, "name": "Premiumfarbe weiß 10L", "menge": 10, "einheit": "L", "epreis": 5, "gesamtpreis": 50}]'
+    memory = FakeMemory("Assistent:\n---\nstatus: bestätigt\nmaterialien:\n- name=Premiumfarbe weiß 10L, menge=10, einheit=L\n---")
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=memory,
+        retriever=None,
+    )
+    payload = {"products": ["Premiumfarbe weiß 10L: 15 L (Reserve 5 L)"]}
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    assert result["positions"][0]["name"] == "Premiumfarbe weiß 10L"
+
+
+def test_generate_offer_positions_prefers_machine_block(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Premiumfarbe weiß 10L", "menge": 12, "einheit": "L", "epreis": 5, "gesamtpreis": 60}]'
+    )
+    history = (
+        "Assistent:\n- Innenanstrich einer Wandfläche von 20 m².\n"
+        "- Der Tiefengrund wird mit einem Verbrauch von ca. 75 ml/m² kalkuliert.\n"
+        "---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Premiumfarbe weiß 10L, menge=12, einheit=L\n"
+        "- name=Tiefgrund 10 L, menge=2, einheit=L\n---"
+    )
+    entry = {
+        "sku": "sku-123",
+        "name": "Dispersionsfarbe weiß, matt, 10 L",
+        "unit": "L",
+        "pack_sizes": ["10L"],
+        "synonyms": ["Innenfarbe"],
+        "category": "Farbe",
+        "brand": "Kalkulai",
+        "description": "Dispersionsfarbe",
+        "raw": "Produkt: Dispersionsfarbe weiß, matt, 10 L",
+    }
+    entry2 = dict(entry)
+    entry2["sku"] = "sku-002"
+    entry2["name"] = "Tiefgrund 10 L"
+    entry2["raw"] = "Produkt: Tiefgrund 10 L"
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=FakeMemory(history),
+        retriever=None,
+        catalog_items=[entry, entry2],
+        catalog_by_name={
+            entry["name"].lower(): entry,
+            entry2["name"].lower(): entry2,
+        },
+        catalog_by_sku={
+            entry["sku"]: entry,
+            entry2["sku"]: entry2,
+        },
+        catalog_text_by_name={
+            entry["name"].lower(): entry.get("raw", ""),
+            entry2["name"].lower(): entry2.get("raw", ""),
+        },
+        catalog_text_by_sku={
+            entry["sku"]: entry.get("raw", ""),
+            entry2["sku"]: entry2.get("raw", ""),
+        },
+    )
+    payload = {
+        "message": "Innenanstrich einer Wandfläche von 20 m²: Der Tiefengrund wird mit 75 ml/m² kalkuliert.",
+    }
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    assert result["positions"][0]["name"] == "Premiumfarbe weiß 10L"
+
+
+def test_generate_offer_positions_deduplicates_machine_items(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Dispersionsfarbe weiß, matt, 10 L", "menge": 12, '
+        '"einheit": "L", "epreis": 5, "gesamtpreis": 60}]'
+    )
+    history = (
+        "Assistent:\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Dispersionsfarbe weiß (für die ganze Fläche), menge=12, einheit=L\n---"
+    )
+    entry = {
+        "sku": "sku-123",
+        "name": "Dispersionsfarbe weiß, matt, 10 L",
+        "unit": "L",
+        "pack_sizes": ["10L"],
+        "synonyms": ["Innenfarbe"],
+        "category": "Farbe",
+        "brand": "Test",
+        "description": "Farbton",
+        "raw": "Produkt: Dispersionsfarbe weiß, matt, 10 L",
+    }
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=FakeMemory(history),
+        retriever=None,
+        catalog_items=[entry],
+        catalog_by_name={entry["name"].lower(): entry},
+        catalog_by_sku={entry["sku"]: entry},
+        catalog_text_by_name={entry["name"].lower(): entry.get("raw", "")},
+        catalog_text_by_sku={entry["sku"]: entry.get("raw", "")},
+    )
+
+    result = generate_offer_positions(payload={"products": ["Dispersionsfarbe weiß, matt, 10 L"]}, ctx=ctx, company_id=None)
+
+    assert len(result["positions"]) == 1
+    assert result["positions"][0]["menge"] == 12
+
+
 def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
     saved_path = tmp_path / "outputs" / "angebot.pdf"
     saved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +326,7 @@ def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "backend.app.pdf", fake_module)
     ctx = make_context(tmp_path)
     payload = {
-        "positions": [{"menge": 2, "einheit": "L", "epreis": 5.0, "gesamtpreis": 10.0}],
+        "positions": [{"menge": 2, "einheit": "L", "epreis": 5.0, "gesamtpreis": 0.0}],
         "kunde": "Test GmbH",
     }
 
@@ -260,3 +392,163 @@ def test_search_catalog_returns_match(tmp_path):
 
     assert result["count"] == 1
     assert result["results"][0]["sku"] == "sku-001"
+
+
+def test_custom_guard_materials_roundtrip(tmp_path, monkeypatch):
+    # Ensure a clean config path per test
+    from backend.app.services import quote_service as qs
+
+    config_path = tmp_path / "guard.json"
+    monkeypatch.setattr(qs, "REVENUE_GUARD_CONFIG_PATH", config_path)
+    qs.GUARD_CONFIG_CACHE = None
+
+    payload = {
+        "items": [
+            {
+                "id": "brandschutz",
+                "name": "Brandschutzfarbe",
+                "keywords": ["brandschutz", "f90"],
+                "reason": "Brandschutzklasse laut Kundenvorgabe.",
+                "default_menge": 5,
+                "einheit": "Eimer",
+                "severity": "high",
+                "category": "Brandschutz",
+                "origin": "custom",
+            },
+            {
+                "id": "primer_tiefgrund",
+                "name": "Spezialgrundierung",
+                "keywords": [],
+                "reason": "Eigene Beschreibung",
+                "default_menge": 3,
+                "einheit": "L",
+                "severity": "low",
+                "category": "Vorarbeiten",
+                "origin": "builtin",
+                "enabled": False,
+            }
+        ],
+    }
+
+    saved = qs.save_revenue_guard_materials(payload=payload)
+    assert any(item["id"] == "brandschutz" for item in saved["items"])
+    assert config_path.exists()
+
+    result = qs.run_revenue_guard(
+        payload={"positions": [{"name": "Innenanstrich Standard", "menge": 10}], "context": {}},
+        debug=False,
+    )
+    assert any(s["id"] == "brandschutz" for s in result["missing"])
+    # Override disabled builtin should suppress the default suggestion
+    assert not any(s["id"] == "primer_tiefgrund" for s in result["missing"])
+
+    loaded = qs.get_revenue_guard_materials()
+    brandschutz = next(item for item in loaded["items"] if item["id"] == "brandschutz")
+    assert brandschutz["keywords"] == ["brandschutz", "f90"]
+    primer = next(item for item in loaded["items"] if item["id"] == "primer_tiefgrund")
+    assert primer["name"] == "Spezialgrundierung"
+
+
+def test_chat_turn_blocks_unknown_materials(tmp_path):
+    reply = (
+        "Alles klar.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Fantasieprodukt, menge=5, einheit=Stück\n---"
+    )
+    ctx = make_context(
+        tmp_path,
+        chain1=FakeChain(reply),
+        memory1=FakeMemory(),
+        catalog_items=[],
+        catalog_by_name={},
+        catalog_by_sku={},
+        catalog_text_by_name={},
+        catalog_text_by_sku={},
+    )
+    result = chat_turn(message="Bitte Angebot", ctx=ctx)
+
+    assert result["ready_for_offer"] is False
+    assert "Produktprüfung" in result["reply"]
+    assert "Fantasieprodukt" in result["reply"]
+
+
+def test_missing_catalog_handles_colon_annotations(tmp_path):
+    ctx = make_context(tmp_path)
+    materials = [{"name": "Premiumfarbe weiß 10L: 15 L (Reserve)", "menge": 15, "einheit": "L"}]
+
+    matches, unknown = qs._validate_materials(materials, ctx, company_id=None)
+
+    assert matches and not unknown
+
+
+def test_generate_offer_positions_requires_known_products(tmp_path):
+    llm_response = '[{"nr": 1, "name": "Fantasieprodukt", "menge": 5, "einheit": "Stück", "epreis": 10, "gesamtpreis": 50}]'
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="{context}\n{question}",
+        retriever=EmptyRetriever(),
+        catalog_items=[],
+        catalog_by_name={},
+        catalog_by_sku={},
+        catalog_text_by_name={},
+        catalog_text_by_sku={},
+    )
+    with pytest.raises(ServiceError) as exc:
+        generate_offer_positions(payload={"products": ["Fantasieprodukt"]}, ctx=ctx)
+    detail = exc.value.message
+    assert isinstance(detail, dict)
+    assert detail["unknown_products"] == ["Fantasieprodukt"]
+
+
+def test_generate_offer_positions_accepts_synonym(tmp_path, monkeypatch):
+    entry = _default_catalog_entry()
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(
+            '[{"nr":1,"name":"Premiumfarbe weiß 10L","menge":5,"einheit":"L","epreis":5,"gesamtpreis":25}]'
+        ),
+        prompt2="{context}\n{question}",
+        catalog_entry=entry,
+    )
+
+    from backend.store import catalog_store
+
+    monkeypatch.setattr(catalog_store, "get_active_products", lambda company_id: [])
+    monkeypatch.setattr(
+        catalog_store,
+        "list_synonyms",
+        lambda company_id: {"premiumfarbe weiß 10l": ["premium tone 10l"]},
+    )
+
+    result = generate_offer_positions(
+        payload={"products": ["Premium Tone 10L"]},
+        ctx=ctx,
+        company_id="demo",
+    )
+    assert result["positions"]
+
+
+def test_generate_offer_positions_accepts_vector_match(tmp_path, monkeypatch):
+    entry = _default_catalog_entry()
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(
+            '[{"nr":1,"name":"Premiumfarbe weiss matt","menge":5,"einheit":"L","epreis":5,"gesamtpreis":25}]'
+        ),
+        prompt2="{context}\n{question}",
+        catalog_entry=entry,
+    )
+
+    monkeypatch.setattr(
+        qs,
+        "_run_thin_catalog_search",
+        lambda **kwargs: [{"name": entry["name"], "sku": entry["sku"], "confidence": 0.9}],
+    )
+    from backend.store import catalog_store
+
+    monkeypatch.setattr(catalog_store, "get_active_products", lambda company_id: [])
+    monkeypatch.setattr(catalog_store, "list_synonyms", lambda company_id: {})
+
+    payload = {"products": ["Premiumfarbe matt extra"]}
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id="demo")
+    assert result["positions"]

@@ -132,6 +132,25 @@ export type RevenueGuardResponse = {
   missing: RevenueGuardSuggestion[];
   rules_fired: { id: string; label?: string; hit: boolean; explanation?: string }[];
 };
+export type RevenueGuardMaterial = {
+  id: string;
+  name: string;
+  keywords: string[];
+  severity: "low" | "medium" | "high";
+  category: string;
+  reason?: string;
+  description?: string;
+  einheit?: string | null;
+  default_menge?: number | null;
+  confidence?: number | null;
+  enabled?: boolean;
+  editable?: boolean;
+  origin?: "builtin" | "custom";
+};
+export type RevenueGuardMaterialsResponse = {
+  items: RevenueGuardMaterial[];
+};
+export type RevenueGuardMaterialInput = Omit<RevenueGuardMaterial, "editable">;
 
 // Reset
 export type ResetResponse = {
@@ -222,6 +241,13 @@ export const api = {
     jsonFetch<RevenueGuardResponse>(`/revenue-guard/check`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  revenueGuardMaterials: () => jsonFetch<RevenueGuardMaterialsResponse>(`/api/revenue-guard/materials`),
+  saveRevenueGuardMaterials: (items: RevenueGuardMaterialInput[]) =>
+    jsonFetch<RevenueGuardMaterialsResponse>(`/api/revenue-guard/materials`, {
+      method: "PUT",
+      body: JSON.stringify({ items }),
     }),
 
   admin: {

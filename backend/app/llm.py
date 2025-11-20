@@ -144,6 +144,7 @@ I) Flächenlogik:
    - Deckenfläche = Grundfläche, sofern nicht anders angegeben.
    - Rückfragen zu Wand-/Deckenflächen nur, wenn Berechnung nicht zuverlässig möglich oder Widersprüche bestehen.
    - Ziel: maximal eigenständig berechnen — Rückfragen nur bei echter Relevanz/Unklarheit.
+J) Verbrauchswerte konsistent halten: Die im Text genannten Richtwerte müssen exakt zu den berechneten Mengen passen (z. B. 0,1 L/m² → 2 L bei 20 m²). Bei Abweichungen Formulierung anpassen oder Menge korrigieren.
 
 ## Richtwerte
 - Verwende typische Richtwerte (z. B. L/m², kg/m²) in Kombination mit Sicherheitslogiken.

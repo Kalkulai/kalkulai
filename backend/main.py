@@ -26,7 +26,9 @@ try:
         generate_offer_positions,
         reset_session,
         render_offer_or_invoice_pdf,
+        get_revenue_guard_materials,
         run_revenue_guard,
+        save_revenue_guard_materials,
         search_catalog as service_catalog_search,
         wizard_finalize,
         wizard_next_step,
@@ -40,7 +42,9 @@ except ModuleNotFoundError:  # pragma: no cover - relative fallback for CLI tool
         generate_offer_positions,
         reset_session,
         render_offer_or_invoice_pdf,
+        get_revenue_guard_materials,
         run_revenue_guard,
+        save_revenue_guard_materials,
         search_catalog as service_catalog_search,
         wizard_finalize,
         wizard_next_step,
@@ -51,6 +55,10 @@ if str(REPO_ROOT) not in sys.path:  # allow running from backend/ or repo root
     sys.path.insert(0, str(REPO_ROOT))
 
 from backend.app import admin_api
+from backend.app.services import quote_service as _quote_service_module
+from backend.retriever.thin import search_catalog_thin as _thin_search_catalog
+
+search_catalog_thin = _thin_search_catalog
 
 
 # ---------- Logging ----------
@@ -107,6 +115,7 @@ _DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://Kalkuali-kalkulai-frontend.hf.space",
+    "http://test.local",
 ]
 _origins_env = os.getenv("FRONTEND_ORIGINS", "")
 ALLOWED_ORIGINS = (
@@ -217,7 +226,17 @@ SERVICE_CONTEXT: QuoteServiceContext | None = None
 def _get_service_context() -> QuoteServiceContext:
     if SERVICE_CONTEXT is None:
         raise RuntimeError("Service context not initialized.")
+    _sync_service_context()
     return SERVICE_CONTEXT
+
+
+def _build_catalog_candidates(items: List[dict]) -> List[Dict[str, Any]]:
+    ctx = _get_service_context()
+    ctx.llm1_mode = LLM1_MODE
+    ctx.adopt_threshold = ADOPT_THRESHOLD
+    ctx.catalog_queries_per_turn = CATALOG_QUERIES_PER_TURN
+    ctx.llm1_thin_retrieval = LLM1_THIN_RETRIEVAL
+    return _quote_service_module._build_catalog_candidates(items, ctx)
 
 
 # ---------- LLMs ----------
@@ -336,6 +355,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ECHO_ORIGINS = set(ALLOWED_ORIGINS or [])
+
+
+@app.middleware("http")
+async def _cors_echo_middleware(request, call_next):
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin and origin in ECHO_ORIGINS:
+        response.headers["access-control-allow-origin"] = origin
+    return response
+
 # Statische Auslieferung der generierten PDFs (aus /app/outputs)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
@@ -435,6 +465,19 @@ def wizard_maler_finalize(payload: Dict[str, Any] = Body(...)):
 def revenue_guard_check(payload: Dict[str, Any] = Body(...)):
     try:
         return run_revenue_guard(payload=payload or {}, debug=DEBUG)
+    except ServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@app.get("/api/revenue-guard/materials")
+def api_revenue_guard_materials():
+    return get_revenue_guard_materials()
+
+
+@app.put("/api/revenue-guard/materials")
+def api_revenue_guard_materials_update(payload: Dict[str, Any] = Body(...)):
+    try:
+        return save_revenue_guard_materials(payload=payload or {})
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
