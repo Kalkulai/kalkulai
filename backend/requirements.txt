@@ -8,6 +8,9 @@ jinja2>=3.1.4,<4.0
 weasyprint>=61.2,<62.0
 striprtf>=0.0.24,<0.1
 
+# -- PDF Rendering stack pins --
+pydyf>=0.9,<0.11  # 0.11+ bricht WeasyPrint 61 wegen neuer __init__-Signatur
+
 # --- LangChain-Ökosystem (ohne direktes 'langchain'!)
 langchain-community>=0.2.0,<0.3
 langchain-openai>=0.1.8,<0.2

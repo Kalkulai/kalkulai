@@ -23,8 +23,8 @@ uvicorn main:app --reload
 ```
 
 Key environment variables (see `backend/.env.example` for the full list):
-- `MODEL_PROVIDER` – `openai` or `ollama`.
-- `OPENAI_API_KEY` / `OLLAMA_BASE_URL` – credentials or local base URL.
+- `MODEL_PROVIDER` – `openai` 
+- `OPENAI_API_KEY`  – credentials or local base URL.
 - `FRONTEND_ORIGINS` – comma separated list of allowed origins for CORS (include your Cloudflare Pages domain and `http://localhost:8080` for local Vite dev).
 - `SKIP_LLM_SETUP` – set to `1` to boot the API without hitting LLM providers (handy for smoke tests).
 

@@ -1,0 +1,20 @@
+[
+  {
+    "sku": "sku_dsp_10",
+    "name": "Dispersionsfarbe wei\u00df",
+    "description": "Innenfarbe",
+    "unit": "",
+    "volume_l": "",
+    "price_eur": "",
+    "active": true
+  },
+  {
+    "sku": "sku_tg_10",
+    "name": "Tiefengrund 10 L",
+    "description": "L\u00f6semittelfrei",
+    "unit": "",
+    "volume_l": "",
+    "price_eur": "",
+    "active": true
+  }
+]

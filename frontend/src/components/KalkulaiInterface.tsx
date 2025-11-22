@@ -9,10 +9,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
+import DatabaseManager from "@/components/DatabaseManager";
+import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
 
 import type {
   RevenueGuardResponse,
@@ -50,6 +53,7 @@ const KalkulaiInterface = () => {
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
   const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const [guardRefreshKey, setGuardRefreshKey] = useState(0);
 
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -145,6 +149,12 @@ const KalkulaiInterface = () => {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (isSettingsDialogOpen) {
+      setGuardRefreshKey((key) => key + 1);
+    }
+  }, [isSettingsDialogOpen]);
 
   // Helper: Section bauen (mit id/ts)
   const mkSection = (s: Omit<UiSection, "id" | "ts">): UiSection => ({
@@ -269,7 +279,8 @@ const KalkulaiInterface = () => {
         kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
       });
 
-      const fullUrl = `${import.meta.env.VITE_API_BASE}${res.pdf_url}`;
+      const base = api.base();
+      const fullUrl = /^https?:\/\//i.test(res.pdf_url) ? res.pdf_url : `${base}${res.pdf_url}`;
       await forceDownload(fullUrl, "Angebot.pdf");
     } catch (e: any) {
       setSections((prev) => [
@@ -572,9 +583,9 @@ const KalkulaiInterface = () => {
                     {inputs.map((m) => (
                       <div key={m.id} className="flex justify-end">
                         <div className="max-w-[80%] rounded-2xl px-4 py-2 text-base shadow-sm bg-primary text-primary-foreground">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {m.text}
-                          </ReactMarkdown>
+                          <div className="markdown-body text-primary-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                          </div>
                           <div className="text-[10px] opacity-70 mt-1 text-right">
                             {new Date(m.ts).toLocaleTimeString()}
                           </div>
@@ -693,7 +704,7 @@ const KalkulaiInterface = () => {
                           <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
                         )}
                         {chatSection.description && (
-                          <div className="prose prose-base md:prose-lg max-w-none text-foreground">
+                          <div className="markdown-body text-foreground text-base leading-7">
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                               {String(chatSection.description)}
                             </ReactMarkdown>
@@ -710,7 +721,7 @@ const KalkulaiInterface = () => {
                         </div>
                         {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
                         {section.description && (
-                          <div className="prose prose-sm max-w-none text-foreground">
+                          <div className="markdown-body text-sm leading-6 text-foreground">
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                               {String(section.description)}
                             </ReactMarkdown>
@@ -778,27 +789,40 @@ const KalkulaiInterface = () => {
       </Dialog>
 
       <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
-        <DialogContent className="max-w-xl space-y-6">
+        <DialogContent className="max-w-3xl space-y-6 max-h-[85vh] overflow-y-auto">
           <DialogHeader className="space-y-1 text-left">
             <DialogTitle>Einstellungen</DialogTitle>
             <DialogDescription>
               Richte KalkulAI nach deinen Arbeitsabläufen aus und verwalte deine Präferenzen zentral.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            {settingsCategories.map((category) => (
-              <div
-                key={category.title}
-                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
-              >
-                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
-              </div>
-            ))}
-          </div>
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="overview">Übersicht</TabsTrigger>
+              <TabsTrigger value="database">Datenbank</TabsTrigger>
+              <TabsTrigger value="guard">Vergessener Wächter</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="mt-4 space-y-3">
+              {settingsCategories.map((category) => (
+                <div
+                  key={category.title}
+                  className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
+                >
+                  <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+                </div>
+              ))}
+            </TabsContent>
+            <TabsContent value="database" className="mt-4">
+              <DatabaseManager />
+            </TabsContent>
+            <TabsContent value="guard" className="mt-4 max-h-[65vh] overflow-y-auto pr-1">
+              <GuardMaterialsEditor refreshSignal={guardRefreshKey} />
+            </TabsContent>
+          </Tabs>
           <DialogFooter className="sm:justify-between">
             <span className="text-xs text-muted-foreground">
-              Hier kannst du bald feingranulare Regeln hinterlegen.
+              Änderungen hier wirken sich direkt auf deine lokale Datenbank aus.
             </span>
             <Button variant="outline" onClick={() => setIsSettingsDialogOpen(false)}>
               Schließen
