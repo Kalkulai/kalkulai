@@ -108,7 +108,11 @@ def tape_m_consumption(edge_m: float, reserve: float = 0.1) -> float:
     return round(base * (1 + reserve), 3)
 
 
-def harmonize_material_line(line: Dict[str, Any]) -> Tuple[Dict[str, Any], list[str]]:
+def harmonize_material_line(
+    line: Dict[str, Any],
+    pack_info: Optional[Tuple[float, str]] = None,
+    base_unit_hint: Optional[str] = None,
+) -> Tuple[Dict[str, Any], list[str]]:
     updated = dict(line)
     reasons: list[str] = []
 
@@ -120,20 +124,24 @@ def harmonize_material_line(line: Dict[str, Any]) -> Tuple[Dict[str, Any], list[
     elif not normalized_unit:
         normalized_unit = unit_raw
 
-    pack_info = _detect_pack_from_name(updated.get("name") or "")
-    requires_conversion = normalized_unit in _CONTAINER_UNITS
+    detected_pack = pack_info or _detect_pack_from_name(updated.get("name") or "")
+    requires_conversion = normalized_unit in _CONTAINER_UNITS or (
+        normalized_unit == "Stück" and base_unit_hint and base_unit_hint != "Stück"
+    )
 
     if requires_conversion:
-        if pack_info:
+        if detected_pack:
             qty = updated.get("menge") or 0
-            pack_value, pack_unit = pack_info
+            pack_value, pack_unit = detected_pack
             base_qty, base_unit = pack_to_base(qty, f"{pack_value} {pack_unit}", pack_unit)
             updated["menge"] = base_qty
-            updated["einheit"] = base_unit
+            updated["einheit"] = base_unit_hint or base_unit
             reasons.append("pack_to_base")
         else:
             reasons.append("no_pack_detected")
 
+    if base_unit_hint and updated.get("einheit") != base_unit_hint:
+        updated["einheit"] = base_unit_hint
     return updated, reasons
 
 

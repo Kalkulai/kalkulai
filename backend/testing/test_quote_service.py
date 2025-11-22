@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 from jinja2 import Environment
@@ -35,17 +36,20 @@ class FakeChain:
 
 
 class FakeChatMemory:
-    def __init__(self):
+    def __init__(self, owner: "FakeMemory"):
         self.messages: list[str] = []
+        self._owner = owner
 
     def add_ai_message(self, content: str) -> None:
         self.messages.append(content)
+        prefix = "\n" if self._owner._history else ""
+        self._owner._history += f"{prefix}Assistent:\n{content}"
 
 
 class FakeMemory:
     def __init__(self, history: str = ""):
         self._history = history
-        self.chat_memory = FakeChatMemory()
+        self.chat_memory = FakeChatMemory(self)
 
     def load_memory_variables(self, _: Dict[str, Any]) -> Dict[str, str]:
         return {"chat_history": self._history}
@@ -78,6 +82,66 @@ def _default_catalog_entry() -> Dict[str, Any]:
         "description": "Hochwertige Dispersionsfarbe",
         "raw": "Produkt: Premiumfarbe weiß 10L",
     }
+
+
+def _override_catalog_entries() -> List[Dict[str, Any]]:
+    return [
+        {
+            "sku": "sku-farbe",
+            "name": "Innenfarbe weiß",
+            "unit": "L",
+            "pack_sizes": ["10 L"],
+            "synonyms": ["Wandfarbe"],
+            "category": "Farbe",
+            "brand": "Test",
+            "description": "Innenanstrich",
+            "raw": "Produkt: Innenfarbe weiß",
+        },
+        {
+            "sku": "sku-folie",
+            "name": "Abdeckfolie 20 m²",
+            "unit": "m²",
+            "pack_sizes": ["20 m²"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Folie",
+            "raw": "Produkt: Abdeckfolie 20 m²",
+        },
+        {
+            "sku": "sku-band",
+            "name": "Abklebeband 19 mm 25 m",
+            "unit": "m",
+            "pack_sizes": ["25 m"],
+            "synonyms": ["Kreppband"],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Band",
+            "raw": "Produkt: Abklebeband 19 mm 25 m",
+        },
+        {
+            "sku": "sku-holz",
+            "name": "Holzschutzgrund honigfarben 5 L",
+            "unit": "L",
+            "pack_sizes": ["5 L"],
+            "synonyms": ["Holzschutz"],
+            "category": "Holzschutz",
+            "brand": "Test",
+            "description": "Holzschutzgrund für Außen",
+            "raw": "Produkt: Holzschutzgrund honigfarben 5 L",
+        },
+        {
+            "sku": "sku-roller",
+            "name": "Farbroller 25 cm",
+            "unit": "Stück",
+            "pack_sizes": ["1 Stück"],
+            "synonyms": ["Rolle"],
+            "category": "Werkzeug",
+            "brand": "Test",
+            "description": "Werkzeug",
+            "raw": "Produkt: Farbroller 25 cm",
+        },
+    ]
 
 
 def make_context(tmp_path, **overrides) -> QuoteServiceContext:
@@ -171,6 +235,19 @@ def test_chat_turn_sets_ready_flag(tmp_path):
     assert result["ready_for_offer"] is True
     assert "**Zusammenfassung**" in result["reply"]
     assert ctx.memory1.chat_memory.messages  # type: ignore[union-attr]
+
+
+def test_chat_turn_requests_details_when_no_data(tmp_path):
+    ctx = make_context(
+        tmp_path,
+        chain1=FakeChain("Gerne, ich helfe Ihnen weiter."),
+        memory1=FakeMemory(),
+    )
+    result = chat_turn(message="Ich brauche ein Angebot.", ctx=ctx)
+
+    assert result["ready_for_offer"] is False
+    assert "Es liegen noch keine Angebotsdaten vor." in result["reply"]
+    assert "Passen die Mengen" not in result["reply"]
 
 
 def test_generate_offer_positions_uses_llm2_and_catalog(tmp_path):
@@ -480,6 +557,167 @@ def test_missing_catalog_handles_colon_annotations(tmp_path):
     assert matches and not unknown
 
 
+def test_validate_materials_accepts_generic_kreppband(tmp_path):
+    entries = [
+        {
+            "sku": "sku_kb25",
+            "name": "Kreppband 25 m",
+            "unit": "m",
+            "pack_sizes": ["25"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Abdeckband schmal",
+            "raw": "Produkt: Kreppband 25 m",
+        },
+        {
+            "sku": "sku_kb50",
+            "name": "Kreppband 50 m",
+            "unit": "m",
+            "pack_sizes": ["50"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Abdeckband breit",
+            "raw": "Produkt: Kreppband 50 m",
+        },
+    ]
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    matches, unknown = qs._validate_materials(
+        [{"name": "Kreppband", "menge": 1, "einheit": "Rolle"}],
+        ctx,
+        company_id=None,
+    )
+
+    assert matches and not unknown
+    assert matches[0]["matched"] is True
+    assert matches[0]["canonical_name"].startswith("Kreppband")
+
+
+def test_validate_materials_accepts_generic_abdeckfolie(tmp_path):
+    entries = [
+        {
+            "sku": "sku_folie20",
+            "name": "Abdeckfolie 20 m²",
+            "unit": "m²",
+            "pack_sizes": ["20"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Folie klein",
+            "raw": "Produkt: Abdeckfolie 20 m²",
+        },
+        {
+            "sku": "sku_folie50",
+            "name": "Abdeckfolie 50 m²",
+            "unit": "m²",
+            "pack_sizes": ["50"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Folie groß",
+            "raw": "Produkt: Abdeckfolie 50 m²",
+        },
+    ]
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    matches, unknown = qs._validate_materials(
+        [{"name": "Abdeckfolie", "menge": 1, "einheit": "Rolle"}],
+        ctx,
+        company_id=None,
+    )
+
+    assert matches and not unknown
+    assert matches[0]["matched"] is True
+    assert matches[0]["canonical_name"].startswith("Abdeckfolie")
+
+
+def test_validate_materials_still_flags_unknown_products(tmp_path):
+    entries = [
+        {
+            "sku": "sku_kb25",
+            "name": "Kreppband 25 m",
+            "unit": "m",
+            "pack_sizes": ["25"],
+            "synonyms": [],
+            "category": "Zubehör",
+            "brand": "Test",
+            "description": "Abdeckband schmal",
+            "raw": "Produkt: Kreppband 25 m",
+        }
+    ]
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    matches, unknown = qs._validate_materials(
+        [{"name": "SuperDeko Farbe 3000", "menge": 1, "einheit": "L"}],
+        ctx,
+        company_id=None,
+    )
+
+    assert matches and unknown
+    assert unknown[0]["query"] == "SuperDeko Farbe 3000"
+
+
+def test_validate_materials_accepts_kreppband_via_thin_candidates(tmp_path, monkeypatch):
+    entry = {
+        "sku": "sku_abkl_standard",
+        "name": "Abklebeband 19 mm, Standard",
+        "unit": "m",
+        "pack_sizes": ["19"],
+        "synonyms": [],
+        "category": "Zubehör",
+        "brand": "Test",
+        "description": "Standard Abklebeband",
+        "raw": "Produkt: Abklebeband 19 mm, Standard",
+    }
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entry,
+        catalog_items=[entry],
+        catalog_by_name={entry["name"].lower(): entry},
+        catalog_by_sku={entry["sku"]: entry},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"]},
+        catalog_text_by_sku={entry["sku"]: entry["raw"]},
+    )
+    monkeypatch.setattr(
+        qs,
+        "_run_thin_catalog_search",
+        lambda **kwargs: [{"name": entry["name"], "sku": entry["sku"], "confidence": 0.32}],
+    )
+
+    matches, unknown = qs._validate_materials(
+        [{"name": "Kreppband", "menge": 1, "einheit": "Rolle"}],
+        ctx,
+        company_id=None,
+    )
+
+    assert matches and not unknown
+    assert matches[0]["match_type"] in {"vector", "type_generic"}
+    assert matches[0]["canonical_name"].startswith("Abklebeband")
+
+
 def test_generate_offer_positions_requires_known_products(tmp_path):
     llm_response = '[{"nr": 1, "name": "Fantasieprodukt", "menge": 5, "einheit": "Stück", "epreis": 10, "gesamtpreis": 50}]'
     ctx = make_context(
@@ -553,3 +791,365 @@ def test_generate_offer_positions_accepts_vector_match(tmp_path, monkeypatch):
     payload = {"products": ["Premiumfarbe matt extra"]}
     result = generate_offer_positions(payload=payload, ctx=ctx, company_id="demo")
     assert result["positions"]
+
+
+def test_offer_positions_use_quantity_override(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=4, einheit=L\n"
+        "- name=Abdeckfolie 20 m², menge=18, einheit=m²\n"
+        "- name=Abklebeband 19 mm, menge=25, einheit=m\n---"
+    )
+    override_reply = (
+        "Mehr Band.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Kreppband, menge=40, einheit=m\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Schlafzimmer", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply)
+    chat_turn(message="Bitte mehr Band", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Innenfarbe weiß", "menge": 4, "einheit": "L", "epreis": 10, "gesamtpreis": 40},
+            {
+                "nr": 2,
+                "name": "Abklebeband 19 mm 25 m Rolle",
+                "menge": 1,
+                "einheit": "Rolle",
+                "epreis": 30,
+                "gesamtpreis": 30,
+            },
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    tape = next(pos for pos in result["positions"] if "Abklebeband" in pos["name"])
+    assert tape["menge"] == 50
+
+
+def test_latest_override_wins(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=4, einheit=L\n"
+        "- name=Abdeckfolie 20 m², menge=18, einheit=m²\n"
+        "- name=Abklebeband 19 mm, menge=25, einheit=m\n---"
+    )
+    override_reply_40 = (
+        "Mehr Band.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Kreppband, menge=40, einheit=m\n---"
+    )
+    override_reply_35 = (
+        "Doch etwas weniger.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Abklebeband 19 mm, menge=35, einheit=m\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Projektstart", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply_40)
+    chat_turn(message="Mehr Band", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply_35)
+    chat_turn(message="Doch weniger", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Innenfarbe weiß", "menge": 4, "einheit": "L", "epreis": 10, "gesamtpreis": 40},
+            {
+                "nr": 2,
+                "name": "Abklebeband 19 mm 25 m Rolle",
+                "menge": 1,
+                "einheit": "Rolle",
+                "epreis": 30,
+                "gesamtpreis": 30,
+            },
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    tape = next(pos for pos in result["positions"] if "Abklebeband" in pos["name"])
+    assert tape["menge"] == 50
+
+
+def test_override_with_unknown_product_is_blocked(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=4, einheit=L\n"
+        "- name=Abdeckfolie 20 m², menge=18, einheit=m²\n"
+        "- name=Abklebeband 19 mm, menge=25, einheit=m\n---"
+    )
+    unknown_reply = (
+        "Neues Produkt.\n---\nstatus: update\nmaterialien:\n"
+        "- name=SuperDeko Farbe 3000, menge=5, einheit=L\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Start", ctx=ctx)
+    ctx.chain1 = FakeChain(unknown_reply)
+    result = chat_turn(message="Unbekanntes Produkt", ctx=ctx)
+    assert result["ready_for_offer"] is False
+    assert "Hinweis zur Produktprüfung" in result["reply"]
+    history = ctx.memory1.load_memory_variables({}).get("chat_history", "")
+    latest = qs._extract_last_machine_items(history, prefer_status="bestätigt")
+    assert latest
+    assert not any("SuperDeko" in item.get("name", "") for item in latest)
+
+
+def test_locked_override_applies_to_paint(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=4, einheit=L\n"
+        "- name=Abdeckfolie 20 m², menge=18, einheit=m²\n"
+        "- name=Abklebeband 19 mm, menge=25, einheit=m\n---"
+    )
+    override_reply = (
+        "Mehr Farbe.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=6, einheit=L\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Los", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply)
+    chat_turn(message="Mehr Farbe", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Innenfarbe weiß", "menge": 5, "einheit": "L", "epreis": 12, "gesamtpreis": 60},
+            {"nr": 2, "name": "Abdeckfolie 20 m²", "menge": 18, "einheit": "m²", "epreis": 2, "gesamtpreis": 36},
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    paint = next(pos for pos in result["positions"] if "Innenfarbe" in pos["name"])
+    assert paint["einheit"] == "L"
+    assert paint["menge"] >= 6
+
+
+def test_pack_conversion_keeps_base_units_for_tape(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Abklebeband 19 mm 25 m, menge=25, einheit=m, sku=sku-band\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Tape", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Abklebeband 19 mm, Standard", "menge": 1, "einheit": "Stück", "epreis": 5, "gesamtpreis": 5}
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    tape_positions = [pos for pos in result["positions"] if "Abklebeband" in pos["name"]]
+    assert len(tape_positions) == 1
+    tape = tape_positions[0]
+    assert tape["einheit"] == "m"
+    assert tape["menge"] >= 25
+
+
+def test_pack_conversion_rounds_up_for_foil(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Abdeckfolie 20 m², menge=20, einheit=m², sku=sku-folie\n---"
+    )
+    override_reply = (
+        "Mehr Folie.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Abdeckfolie 20 m², menge=30, einheit=m², sku=sku-folie\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Projekt", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply)
+    chat_turn(message="Mehr Folie", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Abdeckfolie 20 m²", "menge": 1, "einheit": "Rolle", "epreis": 8, "gesamtpreis": 8},
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    foil = next(pos for pos in result["positions"] if "Abdeckfolie" in pos["name"])
+    assert foil["einheit"] == "m²"
+    assert foil["menge"] == 40
+    assert "locked_quantity" in foil.get("reasons", [])
+
+
+def test_pack_conversion_for_paint_bucket(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=5, einheit=L, sku=sku-farbe\n---"
+    )
+    override_reply = (
+        "Mehr Farbe.\n---\nstatus: update\nmaterialien:\n"
+        "- name=Innenfarbe weiß, menge=6, einheit=L, sku=sku-farbe\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Start", ctx=ctx)
+    ctx.chain1 = FakeChain(override_reply)
+    chat_turn(message="Mehr Farbe", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Innenfarbe weiß 10L Eimer", "menge": 1, "einheit": "Eimer", "epreis": 60, "gesamtpreis": 60},
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    paint = next(pos for pos in result["positions"] if "Innenfarbe" in pos["name"])
+    assert paint["einheit"] == "L"
+    assert paint["menge"] == 10
+
+
+def test_piece_based_unit_stays_stueck(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    initial_reply = (
+        "Start.\n---\nstatus: schätzung\nmaterialien:\n"
+        "- name=Farbroller 25 cm, menge=2, einheit=Stück, sku=sku-roller\n---"
+    )
+    ctx.chain1 = FakeChain(initial_reply)
+    chat_turn(message="Werkzeug", ctx=ctx)
+    llm_response = json.dumps(
+        [
+            {"nr": 1, "name": "Farbroller 25 cm", "menge": 1, "einheit": "Pack", "epreis": 8, "gesamtpreis": 8},
+        ]
+    )
+    ctx.llm2 = FakeLLM(llm_response)
+    result = generate_offer_positions(payload={}, ctx=ctx)
+    roller = next(pos for pos in result["positions"] if "Farbroller" in pos["name"])
+    assert roller["einheit"] == "Stück"
+    assert roller["menge"] >= 2
+
+
+def test_wall_paint_prefers_interior_product(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    matches, unknown = qs._validate_materials(
+        [{"name": "Innenwände streichen, weiße Wandfarbe"}],
+        ctx,
+        company_id=None,
+    )
+    assert not unknown
+    entry = ctx.catalog_by_sku.get(matches[0]["sku"])
+    product_type = qs._classify_product_entry(entry)
+    assert product_type in {"wall_paint_interior", "ceiling_paint_interior"}
+
+
+def test_wood_preserver_selected_for_wood_context(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    matches, unknown = qs._validate_materials(
+        [{"name": "Holzschutz für Gartenzaun"}],
+        ctx,
+        company_id=None,
+    )
+    assert not unknown
+    entry = ctx.catalog_by_sku.get(matches[0]["sku"])
+    product_type = qs._classify_product_entry(entry)
+    assert product_type in {"wood_preserver", "wood_paint"}
+
+
+def test_tape_and_foil_classifications(tmp_path):
+    entries = _override_catalog_entries()
+    ctx = make_context(
+        tmp_path,
+        catalog_entry=entries[0],
+        catalog_items=entries,
+        catalog_by_name={entry["name"].lower(): entry for entry in entries},
+        catalog_by_sku={entry["sku"]: entry for entry in entries},
+        catalog_text_by_name={entry["name"].lower(): entry["raw"] for entry in entries},
+        catalog_text_by_sku={entry["sku"]: entry["raw"] for entry in entries},
+    )
+    tape_matches, tape_unknown = qs._validate_materials([{"name": "Kreppband"}], ctx, company_id=None)
+    assert not tape_unknown
+    entry = ctx.catalog_by_sku.get(tape_matches[0]["sku"])
+    assert qs._classify_product_entry(entry) == "tape"
+
+    foil_matches, foil_unknown = qs._validate_materials([{"name": "Abdeckfolie für Boden"}], ctx, company_id=None)
+    assert not foil_unknown
+    entry = ctx.catalog_by_sku.get(foil_matches[0]["sku"])
+    assert qs._classify_product_entry(entry) == "foil"

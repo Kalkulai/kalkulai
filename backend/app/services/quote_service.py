@@ -36,8 +36,170 @@ from backend.shared.normalize.text import normalize_query as shared_normalize_qu
 from backend.shared.normalize.text import tokenize as shared_tokenize
 
 CATALOG_MATCH_THRESHOLD = 0.45
-VECTOR_MATCH_THRESHOLD = 0.45
+CATALOG_STRONG_MATCH_THRESHOLD = 0.6
+
+NO_DATA_DETAILS_MESSAGE = (
+    "Es liegen noch keine Angebotsdaten vor.\n\n"
+    "Bitte teilen Sie mir Details zu Ihrem Projekt mit, zum Beispiel:\n"
+    "- Welche Fläche (m²) oder welche Räume sollen bearbeitet werden?\n"
+    "- Welche Arbeiten sind geplant (z. B. Wände/Decken streichen, spachteln, lackieren)?\n"
+    "- Welche Materialien stellen Sie sich vor (z. B. Dispersionsfarbe weiß, Tiefgrund, Kreppband)?\n"
+    "- Gibt es Besonderheiten wie Risse, Feuchtigkeit, Altanstriche oder Wunschfarben?"
+)
 MATERIAL_NAME_SPLIT_RE = re.compile(r"[:\n]")
+PACK_SIZE_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(m²|m2|m|mm|cm|kg|g|l|liter|stk|stück|rollen?|rolle|paket|packung)",
+    re.IGNORECASE,
+)
+BASE_UNIT_MAP = {
+    "l": "L",
+    "liter": "L",
+    "litre": "L",
+    "m": "m",
+    "meter": "m",
+    "m²": "m²",
+    "m2": "m²",
+    "qm": "m²",
+    "kg": "kg",
+    "g": "kg",
+    "gramm": "kg",
+    "stk": "Stück",
+    "stück": "Stück",
+    "piece": "Stück",
+    "pcs": "Stück",
+}
+CONTAINER_UNITS = {
+    "kanister",
+    "eimer",
+    "rolle",
+    "rollen",
+    "paket",
+    "pack",
+    "packung",
+    "gebinde",
+    "karton",
+    "dose",
+    "kiste",
+    "set",
+}
+UNIT_HINT_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(l|liter|m²|m2|qm|m|kg|g|stk|stück)",
+    re.IGNORECASE,
+)
+ROOM_TOKENS = {
+    "wohnzimmer",
+    "schlafzimmer",
+    "kinderzimmer",
+    "flur",
+    "kuche",
+    "küche",
+    "bad",
+    "badezimmer",
+    "arbeitszimmer",
+    "buero",
+    "büro",
+    "innenraum",
+    "innenbereich",
+}
+WALL_TOKENS = {"wand", "wande", "wände", "decke", "decken", "waende"}
+INTERIOR_HINT_TOKENS = {"innen", "innenraum", "innenbereich"}
+WOOD_TOKENS = {"holz", "holzzaun", "holzbalken", "sichtbalken", "holzdecke"}
+FACADE_TOKENS = {"fassade", "fassaden", "außen", "aussen", "außenbereich", "außenwand", "aussenwand"}
+TAPE_TOKENS = {"abklebeband", "abdeckband", "kreppband", "malerband", "band"}
+FOIL_TOKENS = {"abdeckfolie", "folie"}
+VLIES_TOKENS = {"abdeckvlies", "malervlies", "vlies"}
+SPACHTEL_TOKENS = {"spachtel", "spachtelmasse", "füller", "fuller"}
+MaterialType = str
+PRODUCT_TYPE_KEYWORDS = {
+    "primer_mineral": [
+        "tiefgrund",
+        "tiefengrund",
+        "putzgrund",
+        "mineral",
+    ],
+    "primer_wood_metal": [
+        "haftgrund",
+        "grundierung",
+        "primer",
+    ],
+    "wood_preserver": [
+        "holzschutz",
+        "holzschutzgrund",
+        "lasur",
+        "holzöl",
+    ],
+    "wood_paint": [
+        "holzlack",
+        "holzfarbe",
+    ],
+    "metal_paint": [
+        "metalllack",
+        "metallfarbe",
+        "metallschutz",
+    ],
+    "tape": [
+        "abklebeband",
+        "abdeckband",
+        "kreppband",
+        "malerband",
+        "band",
+    ],
+    "foil": [
+        "abdeckfolie",
+        "folie",
+    ],
+    "vlies": [
+        "vlies",
+        "abdeckvlies",
+    ],
+    "filler_spachtel": [
+        "spachtel",
+        "spachtelmasse",
+        "füller",
+        "spachtelmasse",
+    ],
+    "wall_paint_interior": [
+        "innenfarbe",
+        "dispersionsfarbe",
+        "wandfarbe",
+        "raufaser",
+        "raumfarbe",
+        "wohnzimmer",
+    ],
+    "ceiling_paint_interior": [
+        "deckenfarbe",
+        "decke",
+    ],
+    "facade_paint_exterior": [
+        "fassadenfarbe",
+        "außen",
+        "aussen",
+        "fassade",
+        "wetterbest",
+    ],
+    "tool_accessory": [
+        "rolle",
+        "pinsel",
+        "teleskop",
+        "eimer",
+        "werkzeug",
+    ],
+}
+REQUEST_COMPATIBILITY: Dict[str, set[str]] = {
+    "wall_paint_interior": {"wall_paint_interior", "ceiling_paint_interior"},
+    "ceiling_paint_interior": {"wall_paint_interior", "ceiling_paint_interior"},
+    "facade_paint_exterior": {"facade_paint_exterior"},
+    "wood_preserver": {"wood_preserver", "wood_paint"},
+    "wood_paint": {"wood_paint", "wood_preserver"},
+    "metal_paint": {"metal_paint"},
+    "primer_mineral": {"primer_mineral"},
+    "primer_wood_metal": {"primer_wood_metal"},
+    "tape": {"tape"},
+    "foil": {"foil"},
+    "vlies": {"vlies"},
+    "filler_spachtel": {"filler_spachtel"},
+    "tool_accessory": {"tool_accessory"},
+}
 
 
 def _run_thin_catalog_search(**kwargs):
@@ -68,6 +230,254 @@ def _normalize_material_name(name: str) -> str:
     cleaned = parts[0].strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned
+
+
+def _collect_tokens(*parts: Optional[str]) -> set[str]:
+    combined = " ".join(part or "" for part in parts)
+    return {tok.lower() for tok in shared_tokenize(combined) if tok}
+
+
+def _build_generic_token_set() -> set[str]:
+    allowed: set[str] = set()
+    for keywords in PRODUCT_TYPE_KEYWORDS.values():
+        for keyword in keywords:
+            allowed.update(_collect_tokens(keyword))
+    extra_terms = [
+        "farbe",
+        "farben",
+        "streichfarbe",
+        "wand",
+        "decken",
+        "streichen",
+        "streiche",
+        "beschichten",
+        "weiß",
+        "weiss",
+        "weiße",
+        "weisse",
+        "hell",
+        "dunkel",
+        "matt",
+        "seidenmatt",
+        "glanz",
+        "innenwand",
+        "innenwände",
+        "innenwaende",
+        "innenwande",
+        "wandfarbe",
+        "deckenfarbe",
+        "streichen",
+        "streiche",
+        "wand",
+        "wände",
+        "waende",
+        "decke",
+        "decken",
+        "raum",
+        "raumfarbe",
+        "standard",
+        "basis",
+        "premium",
+        "klassisch",
+        "zaun",
+        "gartenzaun",
+        "balken",
+        "sichtbalken",
+        "holzdecke",
+        "holzfenster",
+        "holzfassade",
+    ]
+    for term in extra_terms:
+        allowed.update(_collect_tokens(term))
+    return allowed
+
+
+GENERIC_ALLOWED_TOKENS = _build_generic_token_set()
+# measurement/unit tokens considered generic regardless of appearance
+GENERIC_NEUTRAL_TOKENS = {
+    "l",
+    "liter",
+    "m",
+    "m²",
+    "m2",
+    "qm",
+    "kg",
+    "g",
+    "ml",
+}
+GENERIC_STOP_TOKENS = {
+    "fur",
+    "fuer",
+    "für",
+    "mit",
+    "und",
+    "auch",
+    "noch",
+    "bitte",
+    "lieber",
+    "gern",
+    "gerne",
+    "mehr",
+    "weniger",
+    "brauche",
+    "braucht",
+    "brauchen",
+    "zum",
+    "zur",
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "ein",
+    "eine",
+    "einen",
+    "einem",
+    "einer",
+    "auf",
+    "im",
+    "in",
+    "vom",
+    "von",
+    "am",
+    "oder",
+    "plus",
+}
+
+
+def _token_match(tokens: set[str], keywords: set[str]) -> bool:
+    return any(keyword in tokens for keyword in keywords)
+
+
+def _infer_contextual_type(context_text: Optional[str]) -> MaterialType:
+    if not context_text:
+        return "other"
+    tokens = _collect_tokens(context_text)
+    if not tokens:
+        return "other"
+    if _token_match(tokens, TAPE_TOKENS):
+        return "tape"
+    if _token_match(tokens, FOIL_TOKENS):
+        return "foil"
+    if _token_match(tokens, VLIES_TOKENS):
+        return "vlies"
+    if _token_match(tokens, SPACHTEL_TOKENS):
+        return "filler_spachtel"
+    if _token_match(tokens, WOOD_TOKENS):
+        return "wood_preserver"
+    if _token_match(tokens, FACADE_TOKENS):
+        return "facade_paint_exterior"
+    interior_hit = (_token_match(tokens, ROOM_TOKENS) or _token_match(tokens, INTERIOR_HINT_TOKENS)) and _token_match(tokens, WALL_TOKENS)
+    if interior_hit:
+        return "wall_paint_interior"
+    return "other"
+
+
+def _classify_material_from_tokens(tokens: set[str]) -> MaterialType:
+    for material_type, keywords in PRODUCT_TYPE_KEYWORDS.items():
+        if any(keyword in tokens for keyword in keywords):
+            return material_type
+    return "other"
+
+
+def _is_generic_material_query(name: str) -> bool:
+    tokens = _collect_tokens(name)
+    if not tokens:
+        return False
+    for token in tokens:
+        if token.isdigit():
+            continue
+        if token in GENERIC_NEUTRAL_TOKENS:
+            continue
+        if token in GENERIC_STOP_TOKENS:
+            continue
+        if token in GENERIC_ALLOWED_TOKENS:
+            continue
+        return False
+    return True
+
+
+def _compose_context_text(message: Optional[str], ctx: QuoteServiceContext) -> str:
+    parts: List[str] = []
+    if message:
+        parts.append(message)
+    if ctx.memory1 is not None:
+        try:
+            history = ctx.memory1.load_memory_variables({}).get("chat_history", "")  # type: ignore[union-attr]
+        except Exception:
+            history = ""
+        if history:
+            parts.append(history)
+    return " ".join(part for part in parts if part).strip()
+
+
+def _classify_requested_material_type(name: str, context: Optional[str] = None) -> MaterialType:
+    tokens = _collect_tokens(name)
+    raw_text = " ".join(part for part in [name or "", context or ""] if part).lower()
+    direct_type = _classify_material_from_tokens(tokens)
+    if direct_type != "other":
+        return direct_type
+    if "holzschutz" in raw_text or ("holz" in raw_text and ("schutz" in raw_text or "pflege" in raw_text)):
+        return "wood_preserver"
+    if "holz" in raw_text and ("lack" in raw_text or "farbe" in raw_text):
+        return "wood_paint"
+    if any(term in raw_text for term in ("fassade", "außen", "aussen")):
+        return "facade_paint_exterior"
+    context_type = _infer_contextual_type(context or raw_text)
+    if context_type != "other":
+        return context_type
+    return "other"
+
+
+def _classify_product_entry(
+    entry: Optional[Dict[str, Any]],
+    fallback_name: Optional[str] = None,
+) -> MaterialType:
+    if not entry and not fallback_name:
+        return "other"
+    category = (entry.get("category") or "") if entry else ""
+    tokens = _collect_tokens(entry.get("name") if entry else "", entry.get("description") if entry else "", fallback_name, category)
+    raw_text = " ".join(
+        [
+            entry.get("name") if entry else "",
+            entry.get("description") if entry else "",
+            category,
+            fallback_name or "",
+        ]
+    ).lower()
+    if "holzschutz" in raw_text or ("holz" in raw_text and ("schutz" in raw_text or "pflege" in raw_text)):
+        return "wood_preserver"
+    if "holz" in raw_text and ("lack" in raw_text or "farbe" in raw_text):
+        return "wood_paint"
+    unit = (entry.get("unit") or "").lower() if entry else ""
+    if unit in {"l", "liter", "litre"} and "holz" in tokens:
+        return "wood_paint"
+    if unit in {"l", "liter", "litre"} and ("metall" in tokens or "stahl" in tokens):
+        return "metal_paint"
+    classified = _classify_material_from_tokens(tokens)
+    if classified != "other":
+        return classified
+    return _infer_contextual_type(raw_text)
+
+
+def _is_type_compatible(
+    requested: MaterialType,
+    product: MaterialType,
+    context_text: Optional[str] = None,
+) -> bool:
+    adjusted = requested
+    if adjusted == "other" and context_text:
+        inferred = _infer_contextual_type(context_text)
+        if inferred != "other":
+            adjusted = inferred
+    if adjusted == "other":
+        return True
+    if product == "other":
+        return False
+    allowed = REQUEST_COMPATIBILITY.get(adjusted)
+    if allowed is None:
+        return True
+    return product in allowed
 
 
 def _load_company_catalog_products(company_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
@@ -123,9 +533,11 @@ def _match_catalog_entry(
     company_id: Optional[str],
     company_products: Dict[str, Dict[str, Any]],
     company_synonyms: Dict[str, str],
+    context_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     cleaned = _normalize_material_name(query)
     lower = cleaned.lower()
+    requested_type = _classify_requested_material_type(cleaned, context_text)
     result = {
         "query": cleaned,
         "matched": False,
@@ -139,6 +551,10 @@ def _match_catalog_entry(
         return result
 
     entry = ctx.catalog_by_name.get(lower)
+    if entry:
+        product_type = _classify_product_entry(entry)
+        if not _is_type_compatible(requested_type, product_type, context_text):
+            entry = None
     if entry:
         result.update(
             {
@@ -154,6 +570,12 @@ def _match_catalog_entry(
     if lower in company_synonyms:
         canonical_lower = company_synonyms[lower]
         entry = ctx.catalog_by_name.get(canonical_lower)
+        if not entry:
+            entry = _find_company_product_by_lower(canonical_lower, company_products)
+        if entry:
+            product_type = _classify_product_entry(entry)
+            if not _is_type_compatible(requested_type, product_type, context_text):
+                entry = None
         if entry:
             result.update(
                 {
@@ -171,6 +593,9 @@ def _match_catalog_entry(
         if not product_name:
             continue
         if _material_names_match(cleaned, product_name):
+            product_type = _classify_product_entry(product)
+            if not _is_type_compatible(requested_type, product_type, context_text):
+                continue
             result.update(
                 {
                     "matched": True,
@@ -184,6 +609,9 @@ def _match_catalog_entry(
 
     if lower in company_products:
         product = company_products[lower]
+        product_type = _classify_product_entry(product)
+        if not _is_type_compatible(requested_type, product_type, context_text):
+            product = None
         result.update(
             {
                 "matched": True,
@@ -204,13 +632,27 @@ def _match_catalog_entry(
     suggestions = [h.get("name") for h in hits if h.get("name")]
     result["suggestions"] = suggestions
 
+    top_hit: Dict[str, Any] | None = None
+    top_conf = 0.0
     for hit in hits:
         conf_raw = hit.get("confidence", hit.get("score_final"))
         try:
             confidence = float(conf_raw or 0.0)
         except (TypeError, ValueError):
             confidence = 0.0
-        if confidence >= VECTOR_MATCH_THRESHOLD:
+        if confidence > top_conf:
+            top_conf = confidence
+            top_hit = hit
+        product_entry = None
+        sku = (hit.get("sku") or "").strip()
+        if sku:
+            product_entry = ctx.catalog_by_sku.get(sku)
+        if not product_entry and hit.get("name"):
+            product_entry = ctx.catalog_by_name.get((hit.get("name") or "").strip().lower())
+        product_type = _classify_product_entry(product_entry, hit.get("name"))
+        if product_entry and not _is_type_compatible(requested_type, product_type, context_text):
+            continue
+        if confidence >= CATALOG_STRONG_MATCH_THRESHOLD:
             result.update(
                 {
                     "matched": True,
@@ -222,7 +664,159 @@ def _match_catalog_entry(
             )
             break
 
+    if not result["matched"]:
+        lexical_entry = _lexical_partial_catalog_match(cleaned, ctx, company_products, requested_type, context_text)
+        if lexical_entry:
+            entry, similarity = lexical_entry
+            if similarity >= CATALOG_STRONG_MATCH_THRESHOLD:
+                result.update(
+                    {
+                        "matched": True,
+                        "match_type": "lexical_partial",
+                        "confidence": similarity,
+                        "canonical_name": entry.get("name") or cleaned,
+                        "sku": entry.get("sku"),
+                    }
+                )
+            else:
+                name = entry.get("name")
+                if name and name not in result["suggestions"]:
+                    result["suggestions"].append(name)
+
+    if (
+        not result["matched"]
+        and requested_type != "other"
+        and _is_generic_material_query(cleaned)
+    ):
+        candidate = _find_type_candidate(ctx, requested_type)
+        if candidate:
+            result.update(
+                {
+                    "matched": True,
+                    "match_type": "type_generic",
+                    "confidence": 0.55,
+                    "canonical_name": candidate.get("name") or cleaned,
+                    "sku": candidate.get("sku"),
+                }
+            )
+
     return result
+
+
+def _lexical_partial_catalog_match(
+    cleaned: str,
+    ctx: QuoteServiceContext,
+    company_products: Dict[str, Dict[str, Any]],
+    requested_type: MaterialType,
+    context_text: Optional[str],
+) -> Optional[Tuple[Dict[str, Any], float]]:
+    q_norm = _normalize_query(cleaned)
+    if not q_norm:
+        return None
+    q_words = [word for word in q_norm.split() if word]
+    if not q_words:
+        return None
+    significant_tokens = [word for word in q_words if len(word) >= 4]
+    if not significant_tokens:
+        return None
+
+    entries: List[Dict[str, Any]] = list(ctx.catalog_by_name.values())
+    seen_names = {((entry.get("name") or "").strip().lower()) for entry in entries if entry.get("name")}
+    if company_products:
+        for product in company_products.values():
+            name = (product.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen_names:
+                continue
+            entries.append(product)
+            seen_names.add(key)
+
+    candidates: List[Tuple[int, float, int, str, Dict[str, Any], float]] = []
+    for entry in entries:
+        entry_name = (entry.get("name") or "").strip()
+        if not entry_name:
+            continue
+        entry_norm = _normalize_query(entry_name)
+        if not entry_norm:
+            continue
+        entry_words = [word for word in entry_norm.split() if word]
+        if not entry_words:
+            continue
+        product_type = _classify_product_entry(entry)
+        if not _is_type_compatible(requested_type, product_type, context_text):
+            continue
+        match_kind = _lexical_match_kind(q_words, significant_tokens, entry_words)
+        if match_kind is None:
+            continue
+        similarity = SequenceMatcher(None, q_norm, entry_norm).ratio()
+        candidates.append((match_kind, -similarity, len(entry_words), entry_norm, entry, similarity))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda tpl: (tpl[0], tpl[1], tpl[2], tpl[3]))
+    best = candidates[0]
+    return best[4], best[5]
+
+
+def _lexical_match_kind(
+    q_words: List[str],
+    significant_tokens: List[str],
+    entry_words: List[str],
+) -> Optional[int]:
+    if not entry_words or not q_words:
+        return None
+
+    prefix_len = min(len(q_words), len(entry_words))
+    if prefix_len and q_words[:prefix_len] == entry_words[:prefix_len]:
+        if len(q_words) <= len(entry_words):
+            return 0
+        return 1
+
+    if significant_tokens and any(token == word for token in significant_tokens for word in entry_words):
+        return 2
+    for q in q_words:
+        for word in entry_words:
+            if q and word and (q in word or word in q):
+                return 2
+
+    return None
+
+
+def _find_company_product_by_lower(
+    key_lower: str,
+    company_products: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    key_lower = (key_lower or "").strip().lower()
+    if not key_lower:
+        return None
+    direct = company_products.get(key_lower)
+    if direct:
+        return direct
+    for product in company_products.values():
+        name = (product.get("name") or "").strip()
+        if not name:
+            continue
+        pname_lower = name.lower()
+        if key_lower == pname_lower:
+            return product
+        if key_lower in pname_lower:
+            return product
+        if _material_names_match(key_lower, name):
+            return product
+    return None
+
+
+def _find_type_candidate(
+    ctx: QuoteServiceContext,
+    requested_type: MaterialType,
+) -> Optional[Dict[str, Any]]:
+    for entry in ctx.catalog_items:
+        if _classify_product_entry(entry) == requested_type:
+            return entry
+    return None
 
 
 def _validate_materials(
@@ -230,6 +824,7 @@ def _validate_materials(
     ctx: QuoteServiceContext,
     *,
     company_id: Optional[str],
+    context_text: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not materials:
         return [], []
@@ -245,6 +840,7 @@ def _validate_materials(
         name = (item.get("name") or "").strip()
         if not name:
             continue
+        item_context = item.get("context_text") or context_text
         key = name.lower()
         if key in seen:
             continue
@@ -255,12 +851,354 @@ def _validate_materials(
             company_id=company_id,
             company_products=company_products,
             company_synonyms=company_synonyms,
+            context_text=item_context,
         )
         results.append(match)
         if not match["matched"]:
             unknown.append(match)
 
     return results, unknown
+
+
+def _normalize_material_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    name = (entry.get("name") or "").strip()
+    if name:
+        normalized["name"] = name
+    sku_val = (entry.get("sku") or "").strip()
+    if sku_val:
+        normalized["sku"] = sku_val
+    raw_qty = entry.get("menge")
+    qty_val: Optional[float]
+    try:
+        qty_val = float(raw_qty)
+    except (TypeError, ValueError):
+        qty_val = None
+    if qty_val is None:
+        normalized["menge"] = 0.0
+    else:
+        normalized["menge"] = int(qty_val) if qty_val.is_integer() else round(qty_val, 3)
+    normalized["einheit"] = _normalize_unit(entry.get("einheit") or "")
+    if entry.get("locked"):
+        normalized["locked"] = True
+    if entry.get("locked_menge") not in (None, ""):
+        try:
+            locked_qty = float(entry.get("locked_menge"))
+        except (TypeError, ValueError):
+            locked_qty = None
+        if locked_qty is not None:
+            normalized["locked_menge"] = int(locked_qty) if locked_qty.is_integer() else round(locked_qty, 3)
+            normalized["locked"] = True
+    locked_unit = entry.get("locked_einheit") or entry.get("locked_unit")
+    if locked_unit:
+        normalized["locked_einheit"] = _normalize_unit(locked_unit)
+    if entry.get("context_text"):
+        normalized["context_text"] = entry.get("context_text")
+    return normalized
+
+
+def _material_key_and_canonical(
+    name: str,
+    ctx: QuoteServiceContext,
+    *,
+    company_id: Optional[str],
+    company_products: Dict[str, Dict[str, Any]],
+    company_synonyms: Dict[str, str],
+    context_text: Optional[str],
+) -> Tuple[str, str, Optional[str]]:
+    match = _match_catalog_entry(
+        name,
+        ctx,
+        company_id=company_id,
+        company_products=company_products,
+        company_synonyms=company_synonyms,
+        context_text=context_text,
+    )
+    canonical = (match.get("canonical_name") or _normalize_material_name(name) or name).strip()
+    key = canonical.lower()
+    if not key:
+        key = (_normalize_material_name(name) or name).strip().lower()
+    sku = (match.get("sku") or "").strip() or None
+    return key, canonical or name, sku
+
+
+def _apply_material_override(
+    current: Dict[str, Any],
+    update: Dict[str, Any],
+    *,
+    canonical_name: Optional[str],
+    canonical_sku: Optional[str],
+    has_qty: bool,
+    has_unit: bool,
+    lock_quantity: bool,
+    context_text: Optional[str],
+) -> Tuple[Dict[str, Any], bool]:
+    changed = False
+    target = canonical_name or (update.get("name") or "").strip() or current.get("name")
+    if target and target != current.get("name"):
+        current["name"] = target
+        changed = True
+    if canonical_sku and canonical_sku != current.get("sku"):
+        current["sku"] = canonical_sku
+        changed = True
+    if has_qty:
+        qty_val = update.get("menge")
+        if qty_val is not None and qty_val != current.get("menge"):
+            current["menge"] = qty_val
+            changed = True
+    if has_unit:
+        unit_val = update.get("einheit") or ""
+        if unit_val and unit_val != current.get("einheit"):
+            current["einheit"] = unit_val
+            changed = True
+    if lock_quantity and has_qty:
+        current["locked"] = True
+        current["locked_menge"] = update.get("menge")
+        lock_unit = update.get("einheit") or current.get("einheit")
+        if lock_unit:
+            current["locked_einheit"] = lock_unit
+    elif lock_quantity and not has_qty and current.get("locked_menge") is not None:
+        current["locked"] = True
+    if context_text:
+        current["context_text"] = context_text
+    return current, changed
+
+
+def _merge_material_state(
+    previous_items: List[Dict[str, Any]],
+    new_items: List[Dict[str, Any]],
+    ctx: QuoteServiceContext,
+    *,
+    company_id: Optional[str],
+    lock_on_update: bool = False,
+    context_text: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    prev_normalized = [
+        _normalize_material_entry(item)
+        for item in (previous_items or [])
+        if (item.get("name") or "").strip()
+    ]
+    if not new_items:
+        return [dict(entry) for entry in prev_normalized]
+
+    company_products = _load_company_catalog_products(company_id)
+    company_synonyms = _load_company_synonym_map(company_id)
+
+    merged = [dict(entry) for entry in prev_normalized]
+    base_lookup: Dict[str, int] = {}
+    for idx, entry in enumerate(merged):
+        key, _, sku = _material_key_and_canonical(
+            entry.get("name") or "",
+            ctx,
+            company_id=company_id,
+            company_products=company_products,
+            company_synonyms=company_synonyms,
+            context_text=context_text,
+        )
+        if key:
+            base_lookup.setdefault(key, idx)
+        if sku and not entry.get("sku"):
+            entry["sku"] = sku
+
+    for raw in new_items:
+        name = (raw.get("name") or "").strip()
+        if not name:
+            continue
+        has_qty = raw.get("menge") not in (None, "")
+        has_unit = bool(raw.get("einheit"))
+        normalized_update = _normalize_material_entry(raw)
+        key, canonical, detected_sku = _material_key_and_canonical(
+            name,
+            ctx,
+            company_id=company_id,
+            company_products=company_products,
+            company_synonyms=company_synonyms,
+            context_text=context_text,
+        )
+        target_idx = base_lookup.get(key)
+        if target_idx is None and canonical:
+            for idx, existing in enumerate(merged):
+                if _material_names_match(canonical, existing.get("name", "")):
+                    target_idx = idx
+                    break
+        if target_idx is not None:
+            updated_entry, _ = _apply_material_override(
+                merged[target_idx],
+                normalized_update,
+                canonical_name=canonical,
+                canonical_sku=detected_sku,
+                has_qty=has_qty,
+                has_unit=has_unit,
+                lock_quantity=bool(lock_on_update and has_qty),
+                context_text=context_text,
+            )
+            merged[target_idx] = updated_entry
+            continue
+        new_entry = dict(normalized_update)
+        if canonical:
+            new_entry["name"] = canonical
+        if detected_sku:
+            new_entry["sku"] = detected_sku
+        if lock_on_update and has_qty:
+            new_entry["locked"] = True
+            new_entry["locked_menge"] = new_entry.get("menge")
+            new_entry["locked_einheit"] = new_entry.get("einheit")
+        if context_text:
+            new_entry["context_text"] = context_text
+        merged.append(new_entry)
+        if key:
+            base_lookup.setdefault(key, len(merged) - 1)
+
+    return merged
+
+
+def _parse_pack_value(candidate: str, unit_hint: str) -> Optional[Tuple[float, str]]:
+    text = (candidate or "").strip()
+    if not text:
+        return None
+    match = PACK_SIZE_PATTERN.search(text)
+    if match:
+        value = float(match.group(1).replace(",", "."))
+        unit = _normalize_unit(match.group(2))
+        return value, unit
+    try:
+        value = float(text.replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    unit = unit_hint or ""
+    if unit:
+        return value, unit
+    return None
+
+
+def _resolve_pack_info(
+    entry: Optional[Dict[str, Any]],
+    fallback_name: Optional[str],
+) -> Optional[Tuple[float, str]]:
+    unit_hint = _normalize_unit(entry.get("unit") or "") if entry else ""
+    candidates: List[str] = []
+    if entry:
+        pack_sizes = entry.get("pack_sizes")
+        if isinstance(pack_sizes, list):
+            candidates.extend(str(item) for item in pack_sizes if item not in (None, ""))
+        elif pack_sizes not in (None, ""):
+            candidates.append(str(pack_sizes))
+        if entry.get("description"):
+            candidates.append(str(entry["description"]))
+        if entry.get("name"):
+            candidates.append(str(entry["name"]))
+    if fallback_name:
+        candidates.append(str(fallback_name))
+    for candidate in candidates:
+        info = _parse_pack_value(candidate, unit_hint)
+        if info:
+            value, unit = info
+            canonical = _resolve_canonical_unit(unit, candidate, candidate)
+            return value, canonical
+    return None
+
+
+def _resolve_canonical_unit(
+    product_unit: Optional[str],
+    name: Optional[str],
+    description: Optional[str],
+) -> str:
+    raw = (product_unit or "").strip().lower()
+    if raw in BASE_UNIT_MAP:
+        return BASE_UNIT_MAP[raw]
+    if raw in CONTAINER_UNITS or not raw:
+        sources = [name or "", description or ""]
+        for text in sources:
+            for match in UNIT_HINT_PATTERN.finditer(text):
+                candidate = match.group(2).lower()
+                if candidate in BASE_UNIT_MAP:
+                    return BASE_UNIT_MAP[candidate]
+        return "Stück"
+    return BASE_UNIT_MAP.get(raw, "Stück")
+
+
+def _enforce_locked_quantities(
+    positions: List[Dict[str, Any]],
+    latest_items: List[Dict[str, Any]],
+    ctx: QuoteServiceContext,
+) -> List[Dict[str, Any]]:
+    if not positions or not latest_items:
+        return positions
+    locked_items = [
+        item for item in latest_items if item.get("locked") and item.get("locked_menge") not in (None, "")
+    ]
+    if not locked_items:
+        return positions
+
+    def _entry_for_position(pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        sku = (pos.get("matched_sku") or "").strip()
+        if sku:
+            return ctx.catalog_by_sku.get(sku)
+        name = (pos.get("name") or "").strip().lower()
+        if name:
+            return ctx.catalog_by_name.get(name)
+        return None
+
+    def _match_position(item: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        sku_target = (item.get("sku") or "").strip().lower()
+        for pos in positions:
+            pos_sku = (pos.get("matched_sku") or "").strip().lower()
+            if sku_target and pos_sku == sku_target:
+                return pos, _entry_for_position(pos)
+        target_name = (item.get("name") or "").strip()
+        for pos in positions:
+            pname = (pos.get("name") or "").strip()
+            if pname and target_name and _material_names_match(pname, target_name):
+                return pos, _entry_for_position(pos)
+        return None, None
+
+    for item in locked_items:
+        locked_qty_raw = item.get("locked_menge", item.get("menge"))
+        try:
+            locked_qty = float(locked_qty_raw)
+        except (TypeError, ValueError):
+            continue
+        if locked_qty <= 0:
+            continue
+        pos, entry = _match_position(item)
+        if not pos:
+            continue
+        try:
+            current_qty = float(pos.get("menge", 0))
+        except (TypeError, ValueError):
+            current_qty = 0.0
+        locked_unit = _resolve_canonical_unit(
+            item.get("locked_einheit") or item.get("einheit"),
+            item.get("name"),
+            None,
+        )
+        target_unit = (
+            _resolve_canonical_unit(entry.get("unit"), entry.get("name"), entry.get("description"))
+            if entry
+            else _resolve_canonical_unit(pos.get("einheit"), pos.get("name"), None)
+        )
+        if locked_unit and target_unit and locked_unit != target_unit:
+            locked_unit = target_unit
+        min_required = max(current_qty, locked_qty)
+        enforced_qty = min_required
+        pack_info = _resolve_pack_info(entry, pos.get("name"))
+        if pack_info and target_unit and _normalize_unit(pack_info[1]) == target_unit:
+            pack_value = float(pack_info[0])
+            if pack_value > 0:
+                packs_needed = math.ceil(min_required / pack_value)
+                enforced_qty = packs_needed * pack_value
+        if enforced_qty > current_qty + 1e-6:
+            pos["menge"] = int(enforced_qty) if float(enforced_qty).is_integer() else round(enforced_qty, 3)
+            if target_unit:
+                pos["einheit"] = target_unit
+            if pos.get("epreis") not in (None, ""):
+                try:
+                    epreis_val = float(pos.get("epreis", 0))
+                except (TypeError, ValueError):
+                    epreis_val = 0.0
+                pos["gesamtpreis"] = round(epreis_val * float(pos["menge"]), 2)
+            pos.setdefault("reasons", []).append("locked_quantity")
+    return positions
 
 
 def _format_unknown_products_reply(unknown_entries: List[Dict[str, Any]]) -> str:
@@ -674,7 +1612,27 @@ def _extract_materials_from_text_any(text: str) -> list[dict]:
 
 
 def _make_machine_block(status: str, items: list[dict]) -> str:
-    lines = [f"- name={it['name']}, menge={it['menge']}, einheit={it['einheit']}" for it in items]
+    lines = []
+    for it in items:
+        name = it.get("name") or ""
+        menge = it.get("menge")
+        einheit = it.get("einheit") or ""
+        base = f"- name={name}, menge={menge}, einheit={einheit}"
+        extras: List[str] = []
+        sku = (it.get("sku") or "").strip()
+        if sku:
+            extras.append(f"sku={sku}")
+        if it.get("locked"):
+            extras.append("locked=1")
+            locked_qty = it.get("locked_menge", menge)
+            if locked_qty not in (None, ""):
+                extras.append(f"locked_qty={locked_qty}")
+            locked_unit = it.get("locked_einheit") or it.get("einheit")
+            if locked_unit:
+                extras.append(f"locked_unit={locked_unit}")
+        if extras:
+            base += ", " + ", ".join(extras)
+        lines.append(base)
     return f"---\nstatus: {status}\nmaterialien:\n" + "\n".join(lines) + "\n---"
 
 
@@ -687,7 +1645,11 @@ def _strip_machine_sections(text: str) -> str:
     return cleaned.strip()
 
 
-def _build_catalog_candidates(items: List[dict], ctx: QuoteServiceContext) -> List[Dict[str, Any]]:
+def _build_catalog_candidates(
+    items: List[dict],
+    ctx: QuoteServiceContext,
+    context_text: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     if not ctx.llm1_thin_retrieval or not items:
         return []
 
@@ -697,6 +1659,7 @@ def _build_catalog_candidates(items: List[dict], ctx: QuoteServiceContext) -> Li
         query = (item.get("name") or "").strip()
         if not query:
             continue
+        requested_type = _classify_requested_material_type(query, context_text)
         key = query.lower()
         if key in seen_queries or len(seen_queries) >= ctx.catalog_queries_per_turn:
             continue
@@ -716,6 +1679,15 @@ def _build_catalog_candidates(items: List[dict], ctx: QuoteServiceContext) -> Li
         matches: List[Dict[str, Any]] = []
         for hit in raw_hits:
             score_final = float(hit.get("score_final", hit.get("confidence", 0.0)) or 0.0)
+            product_entry = None
+            hit_sku = (hit.get("sku") or "").strip()
+            if hit_sku:
+                product_entry = ctx.catalog_by_sku.get(hit_sku)
+            if not product_entry and hit.get("name"):
+                product_entry = ctx.catalog_by_name.get((hit.get("name") or "").strip().lower())
+            product_type = _classify_product_entry(product_entry, hit.get("name"))
+            if product_entry and not _is_type_compatible(requested_type, product_type, context_text):
+                continue
             mapped = {
                 "sku": hit.get("sku"),
                 "name": hit.get("name"),
@@ -847,12 +1819,52 @@ def _extract_last_machine_items(history: str, prefer_status: Optional[str] = Non
         status = (match.group(1) or "").strip().lower()
         body = match.group(2) or ""
         items = []
-        for m in SUG_RE.finditer(body):
-            items.append({
-                "name": (m.group(1) or "").strip(),
-                "menge": float((m.group(2) or "0").replace(",", ".")),
-                "einheit": (m.group(3) or "").strip(),
-            })
+        for raw_line in body.splitlines():
+            line = (raw_line or "").strip()
+            if not line.startswith("- name=") or ", menge=" not in line or ", einheit=" not in line:
+                continue
+            try:
+                name_part, rest = line.split(", menge=", 1)
+                qty_part, unit_rest = rest.split(", einheit=", 1)
+            except ValueError:
+                continue
+            name_val = name_part.replace("- name=", "", 1).strip()
+            qty_str = qty_part.strip()
+            unit_clean = unit_rest.strip()
+            extra = ""
+            if ", " in unit_clean:
+                unit_clean, extra = unit_clean.split(", ", 1)
+            elif ",\t" in unit_clean:
+                unit_clean, extra = unit_clean.split(",\t", 1)
+            try:
+                menge_val = float(qty_str.replace(",", "."))
+            except ValueError:
+                menge_val = 0.0
+            entry = {
+                "name": name_val,
+                "menge": menge_val,
+                "einheit": unit_clean.strip(),
+            }
+            if extra:
+                for token in extra.split(","):
+                    token = token.strip()
+                    if not token or "=" not in token:
+                        continue
+                    key, value = token.split("=", 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+                    if key == "locked":
+                        entry["locked"] = value in {"1", "true", "True"}
+                    elif key == "locked_qty":
+                        try:
+                            entry["locked_menge"] = float(value.replace(",", "."))
+                        except ValueError:
+                            pass
+                    elif key == "locked_unit":
+                        entry["locked_einheit"] = value
+                    elif key == "sku":
+                        entry["sku"] = value
+            items.append(entry)
         blocks.append({"status": status, "items": items})
 
     if not blocks:
@@ -1515,24 +2527,44 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
     message = (message or "").strip()
     if not message:
         raise ServiceError("message required", status_code=400)
+    history_before = ctx.memory1.load_memory_variables({}).get("chat_history", "")
+    context_hint = _compose_context_text(message, ctx)
+    previous_items = (
+        _extract_last_machine_items(history_before, prefer_status="bestätigt")
+        or _extract_last_machine_items(history_before)
+        or []
+    )
 
     result = ctx.chain1.run(human_input=message)
     reply_text = result or ""
     reply_lower = reply_text.lower()
 
     has_machine_block = ("status:" in reply_lower) and ("materialien:" in reply_lower) and ("- name=" in reply_lower)
-    materials_in_reply = _extract_materials_from_text_any(reply_text)
-    if not has_machine_block and materials_in_reply:
+    pending_machine_block: Optional[str] = None
+    pending_confirmed_block: Optional[str] = None
+    raw_materials = _extract_materials_from_text_any(reply_text)
+    for item in raw_materials:
+        item["context_text"] = context_hint
+    materials_in_reply = _merge_material_state(
+        previous_items,
+        raw_materials,
+        ctx,
+        company_id=ctx.default_company_id,
+        lock_on_update=bool(previous_items),
+        context_text=context_hint,
+    )
+    if not has_machine_block and raw_materials:
         machine_block = _make_machine_block("schätzung", materials_in_reply)
-        try:
-            ctx.memory1.chat_memory.add_ai_message(machine_block)  # type: ignore[union-attr]
-        except Exception:
-            pass
+        pending_machine_block = machine_block
         has_machine_block = True
 
     user_confirms = bool(CONFIRM_USER_RE.search(message))
     bot_confirms = bool(CONFIRM_REPLY_RE.search(reply_text))
     ready = bot_confirms or user_confirms
+    ready_confirmed = ready
+
+    if not ready and has_machine_block:
+        ready = True
 
     if ready:
         items = materials_in_reply or []
@@ -1542,21 +2574,16 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
 
         if items:
             confirmed_block = _make_machine_block("bestätigt", items)
-            try:
-                ctx.memory1.chat_memory.add_ai_message(confirmed_block)  # type: ignore[union-attr]
-            except Exception:
-                pass
-            reply_text = (
-                "**Zusammenfassung**\n"
-                "- Mengen übernommen; Angebot wird jetzt erstellt.\n\n"
-                + confirmed_block
-            )
+            if ready_confirmed:
+                reply_text = (
+                    "**Zusammenfassung**\n"
+                    "- Mengen übernommen; Angebot wird jetzt erstellt.\n\n"
+                    + confirmed_block
+                )
             materials_in_reply = items
+            pending_confirmed_block = confirmed_block
         else:
             ready = False
-
-    if not ready and has_machine_block:
-        ready = True
 
     lookup_materials = materials_in_reply
     if not lookup_materials and ctx.memory1 is not None:
@@ -1568,16 +2595,31 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
             lookup_materials,
             ctx,
             company_id=ctx.default_company_id,
+            context_text=context_hint,
         )
         if unknown_entries:
-            reply_text = _format_unknown_products_reply(unknown_entries)
+            products = [entry["query"] for entry in unknown_entries]
+            reply_text = chat_unknown_products_message(products)
             display_text = reply_text.strip()
             return {"reply": display_text, "ready_for_offer": False}
+    else:
+        reply_text = NO_DATA_DETAILS_MESSAGE
+
+    if pending_machine_block:
+        try:
+            ctx.memory1.chat_memory.add_ai_message(pending_machine_block)  # type: ignore[union-attr]
+        except Exception:
+            pass
+    if pending_confirmed_block:
+        try:
+            ctx.memory1.chat_memory.add_ai_message(pending_confirmed_block)  # type: ignore[union-attr]
+        except Exception:
+            pass
 
     catalog_candidates: List[Dict[str, Any]] = []
     if ctx.llm1_thin_retrieval and lookup_materials:
         if lookup_materials:
-            catalog_candidates = _build_catalog_candidates(lookup_materials, ctx)
+            catalog_candidates = _build_catalog_candidates(lookup_materials, ctx, context_text=context_hint)
             if catalog_candidates:
                 lines = []
                 for cand in catalog_candidates:
@@ -1607,9 +2649,10 @@ def chat_turn(*, message: str, ctx: QuoteServiceContext) -> Dict[str, Any]:
                 except Exception:
                     pass
 
+    should_prompt_quantities = bool(has_machine_block or raw_materials)
     display_text = _strip_machine_sections(reply_text) or reply_text.strip()
     followup_prompt = "Passen die Mengen so oder wünschen Sie Änderungen?"
-    if not (bot_confirms or user_confirms):
+    if should_prompt_quantities and not (bot_confirms or user_confirms):
         if followup_prompt.lower() not in display_text.lower():
             display_text = (display_text.rstrip() + ("\n\n" if display_text else "") + followup_prompt).strip()
 
@@ -1714,6 +2757,15 @@ def _material_lookup_variants(name: str) -> List[str]:
     generic_trim = re.sub(r"\s*\([^)]*\)\s*$", "", no_colon).strip()
     if generic_trim:
         _add(generic_trim)
+    measurement_source = generic_trim or no_paren
+    measurement_trim = re.sub(
+        r"\s+\d+(?:[.,]\d+)?\s*(m²|m2|m|mm|cm|kg|g|l|liter|stk|stück|rollen|rolle|pack|paket|sack)\b$",
+        "",
+        measurement_source,
+        flags=re.IGNORECASE,
+    ).strip()
+    if measurement_trim:
+        _add(measurement_trim)
     extras = list(variants)
     for existing in extras:
         for sep in (",", ";"):
@@ -1870,10 +2922,12 @@ def generate_offer_positions(
             chosen_products = chosen_products_from_state
 
     company_for_validation = company_id or ctx.default_company_id
+    context_hint_offer = _compose_context_text(message, ctx)
     validation_results, validation_unknown = _validate_materials(
         [{"name": name} for name in chosen_products],
         ctx,
         company_id=company_for_validation,
+        context_text=context_hint_offer,
     )
     if validation_unknown:
         detail = {
@@ -1994,6 +3048,10 @@ def generate_offer_positions(
                     continue
                 if _material_names_match(target, pname):
                     return pos
+                t_lower = target.lower()
+                p_lower = pname.lower()
+                if t_lower and p_lower and (t_lower in p_lower or p_lower in t_lower):
+                    return pos
             return None
 
         for item in latest_items:
@@ -2069,7 +3127,22 @@ def generate_offer_positions(
 
     harmonized_positions: List[Dict[str, Any]] = []
     for pos in positions:
-        pos2, harmonize_reasons = harmonize_material_line(pos)
+        entry = None
+        matched_sku = (pos.get("matched_sku") or "").strip()
+        if matched_sku:
+            entry = ctx.catalog_by_sku.get(matched_sku)
+        elif (pos.get("name") or "").strip():
+            entry = ctx.catalog_by_name.get((pos.get("name") or "").strip().lower())
+        pack_info = _resolve_pack_info(entry, pos.get("name"))
+        if entry:
+            base_unit_hint = _resolve_canonical_unit(entry.get("unit"), entry.get("name"), entry.get("description"))
+        else:
+            base_unit_hint = _resolve_canonical_unit(pos.get("einheit"), pos.get("name"), None)
+        pos2, harmonize_reasons = harmonize_material_line(
+            pos,
+            pack_info=pack_info,
+            base_unit_hint=base_unit_hint or None,
+        )
         if harmonize_reasons:
             pos2.setdefault("reasons", []).extend(harmonize_reasons)
         try:
@@ -2077,8 +3150,10 @@ def generate_offer_positions(
             pos2["menge"] = int(menge_val) if menge_val.is_integer() else round(menge_val, 3)
         except (TypeError, ValueError):
             pass
+        if base_unit_hint:
+            pos2["einheit"] = base_unit_hint
         harmonized_positions.append(pos2)
-    positions = harmonized_positions
+    positions = _enforce_locked_quantities(harmonized_positions, latest_items, ctx)
 
     return {"positions": positions, "raw": answer}
 

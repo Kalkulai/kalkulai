@@ -57,6 +57,7 @@ if str(REPO_ROOT) not in sys.path:  # allow running from backend/ or repo root
 from backend.app import admin_api
 from backend.app.services import quote_service as _quote_service_module
 from backend.retriever.thin import search_catalog_thin as _thin_search_catalog
+from backend.store import catalog_store
 
 search_catalog_thin = _thin_search_catalog
 
@@ -221,22 +222,32 @@ CATALOG_TEXT_BY_SKU: Dict[str, str] = {
 CATALOG_SEARCH_CACHE: Dict[Tuple[str, int], Tuple[float, List[Dict[str, Any]]]] = {}
 WIZ_SESSIONS: dict[str, dict] = {}
 SERVICE_CONTEXT: QuoteServiceContext | None = None
+_DB_INITIALIZED = False
+
+
+def _initialize_database() -> None:
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED:
+        return
+    catalog_store.init_db()
+    _DB_INITIALIZED = True
 
 
 def _get_service_context() -> QuoteServiceContext:
+    _initialize_database()
     if SERVICE_CONTEXT is None:
         raise RuntimeError("Service context not initialized.")
     _sync_service_context()
     return SERVICE_CONTEXT
 
 
-def _build_catalog_candidates(items: List[dict]) -> List[Dict[str, Any]]:
+def _build_catalog_candidates(items: List[dict], context_text: Optional[str] = None) -> List[Dict[str, Any]]:
     ctx = _get_service_context()
     ctx.llm1_mode = LLM1_MODE
     ctx.adopt_threshold = ADOPT_THRESHOLD
     ctx.catalog_queries_per_turn = CATALOG_QUERIES_PER_TURN
     ctx.llm1_thin_retrieval = LLM1_THIN_RETRIEVAL
-    return _quote_service_module._build_catalog_candidates(items, ctx)
+    return _quote_service_module._build_catalog_candidates(items, ctx, context_text=context_text)
 
 
 # ---------- LLMs ----------
@@ -335,6 +346,7 @@ def _ensure_llm_enabled(component: str) -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    _initialize_database()
     print("✅ Startup")
     print(f"   MODEL_PROVIDER={MODEL_PROVIDER}  LLM1={MODEL_LLM1}  LLM2={MODEL_LLM2}  VAT_RATE={VAT_RATE}")
     print(f"   Produktdatei: {'OK' if PRODUCT_FILE.exists() else 'FEHLT'}")
