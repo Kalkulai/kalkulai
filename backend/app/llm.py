@@ -139,7 +139,7 @@ E) Keine Gebinde-Logik: Nur Basis-Einheiten (kg, L, m², m, Stück) ausgeben.
 F) **MATERIALIEN-SPEZIFIKATION (KRITISCH):**
    - Verwende IMMER vollständige, spezifische Produktnamen mit ALLEN vom Kunden genannten Eigenschaften
    - Inkludiere Produkttyp + Eigenschaften (Farbe, Anwendung, etc.)
-   - Beispiele RICHTIG: "Dispersionsfarbe weiß", "Tiefgrund Innen", "Kreppband 19mm", "Acryllack weiß hochglänzend"
+   - Beispiele RICHTIG: "Dispersionsfarbe weiß", "Tiefengrund", "Kreppband 19mm", "Acryllack weiß hochglänzend"
    - Beispiele FALSCH: "Farbe", "Grundierung", "Klebeband", "Lack"
    - Bei generischen User-Angaben ("weiße Farbe"): Interpretiere als "Dispersionsfarbe weiß" (Standard für Innenanstrich)
    - Bei unklarem Produkttyp: Kurze Rückfrage statt generischem Begriff
