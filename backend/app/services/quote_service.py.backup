@@ -36,7 +36,7 @@ from backend.shared.normalize.text import normalize_query as shared_normalize_qu
 from backend.shared.normalize.text import tokenize as shared_tokenize
 
 CATALOG_MATCH_THRESHOLD = 0.45
-CATALOG_STRONG_MATCH_THRESHOLD = 0.5  # Lowered from 0.6 for better fuzzy matching with dynamic catalogs
+CATALOG_STRONG_MATCH_THRESHOLD = 0.6
 
 NO_DATA_DETAILS_MESSAGE = (
     "Es liegen noch keine Angebotsdaten vor.\n\n"
@@ -3204,8 +3204,7 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
         except (TypeError, ValueError):
             menge_val = 0.0
         try:
-            # Support both "epreis" and "einzelpreis"
-            epreis_val = float(p.get("epreis") or p.get("einzelpreis", 0))
+            epreis_val = float(p.get("epreis", 0))
         except (TypeError, ValueError):
             epreis_val = 0.0
         p["gesamtpreis"] = round(menge_val * epreis_val, 2)

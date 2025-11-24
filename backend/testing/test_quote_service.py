@@ -266,7 +266,73 @@ def test_generate_offer_positions_uses_llm2_and_catalog(tmp_path):
 
     assert result["positions"][0]["name"] == "Premiumfarbe weiß 10L"
     assert result["positions"][0]["gesamtpreis"] == 50
-    assert result["raw"] == llm_response
+    assert json.loads(result["raw"]) == result["positions"]
+
+
+def test_generate_offer_positions_adjusts_price_for_pack_conversion(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Premiumfarbe weiß 10L", "menge": 1, '
+        '"einheit": "Eimer", "epreis": 29.9, "gesamtpreis": 29.9}]'
+    )
+    memory = FakeMemory("Assistent:\n---\nstatus: bestätigt\nmaterialien:\n- name=Premiumfarbe weiß 10L, menge=1, einheit=Eimer\n---")
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=memory,
+        retriever=None,
+    )
+    payload = {"products": ["Premiumfarbe weiß 10L"]}
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    pos = result["positions"][0]
+    assert pos["einheit"] == "L"
+    assert pos["menge"] == 10
+    assert pytest.approx(pos["epreis"], rel=1e-6) == 2.99
+    assert pytest.approx(pos["gesamtpreis"], rel=1e-6) == 29.9
+    assert json.loads(result["raw"]) == result["positions"]
+
+
+def test_generate_offer_positions_adjusts_price_for_roll_conversion(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Kreppband 50 m", "menge": 1, '
+        '"einheit": "Rolle", "epreis": 2.9, "gesamtpreis": 2.9}]'
+    )
+    tape_entry = {
+        "sku": "sku-band-50",
+        "name": "Kreppband 50 m",
+        "unit": "m",
+        "pack_sizes": ["50 m"],
+        "synonyms": ["Abklebeband"],
+        "category": "Zubehör",
+        "brand": "Test",
+        "description": "Klebeband",
+        "raw": "Produkt: Kreppband 50 m",
+    }
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=FakeMemory(),
+        retriever=None,
+        catalog_entry=tape_entry,
+        catalog_items=[tape_entry],
+        catalog_by_name={tape_entry["name"].lower(): tape_entry},
+        catalog_by_sku={tape_entry["sku"]: tape_entry},
+        catalog_text_by_name={tape_entry["name"].lower(): tape_entry["raw"]},
+        catalog_text_by_sku={tape_entry["sku"]: tape_entry["raw"]},
+    )
+    payload = {"products": ["Kreppband 50 m"]}
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    pos = result["positions"][0]
+    assert pos["einheit"] == "m"
+    assert pos["menge"] == 50
+    assert pytest.approx(pos["epreis"], rel=1e-6) == 2.9 / 50
+    assert pytest.approx(pos["gesamtpreis"], rel=1e-6) == 2.9
+    assert json.loads(result["raw"]) == result["positions"]
 
 
 def test_generate_offer_positions_without_context_raises(tmp_path):
