@@ -2,6 +2,7 @@ import os
 from textwrap import dedent
 from langchain_core.prompts import PromptTemplate
 from langchain.chains import LLMChain
+from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferWindowMemory
 
 
