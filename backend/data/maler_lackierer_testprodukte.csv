@@ -1,38 +1,38 @@
-sku,name,description,unit,volume_l,price_eur,active
-sku_dsp_10,Dispersionsfarbe weiß,Innenfarbe,l,10,59.9,True
-sku_dsp_5,Dispersionsfarbe weiß 5L,Innenfarbe,l,5,34.9,True
-sku_dsp_bunt,Dispersionsfarbe bunt,Abtönfarbe für Innenbereich,l,5,36.9,True
-sku_tg_10,Tiefengrund 10 L,Lösemittelfrei,l,10,24.5,True
-sku_tg_5,Tiefengrund 5 L,Lösemittelfrei,l,5,14.9,True
-sku_spachtel_5kg,Feinspachtel 5 kg,Wandspachtel für Innenbereiche,kg,5,14.9,True
-sku_spachtel_15kg,Feinspachtel 15 kg,Wandspachtel für Innenbereiche,kg,15,29.9,True
-sku_lack_1L,Acryllack weiß,Für Türen und Fenster,l,1,22.5,True
-sku_lack_2_5L,Acryllack weiß 2.5L,Für Türen und Fenster,l,2.5,39.5,True
-sku_lack_bunt_1L,Acryllack bunt,Farblack für Innen und Außen,l,1,24.5,True
-sku_klebeband_50,Kreppband 50 m,Abdeckband zum Schutz von Kanten,m,50,3.5,True
-sku_klebeband_25,Kreppband 25 m,Abdeckband für schmale Kanten,m,25,2.9,True
-sku_folie_20m2,Abdeckfolie 20 m²,Transparente Malerfolie,m²,20,4.9,True
-sku_folie_50m2,Abdeckfolie 50 m²,Transparente Malerfolie,m²,50,8.9,True
-sku_rolle_25cm,Farbrolle 25 cm,Nylonrolle für glatte Flächen,stk,1,5.9,True
-sku_rolle_18cm,Farbrolle 18 cm,Nylonrolle für Ecken und kleine Flächen,stk,1,4.9,True
-sku_pinsel_50mm,Flachpinsel 50 mm,Allround-Pinsel für Acryl- und Dispersionsfarben,stk,1,3.2,True
-sku_pinsel_30mm,Flachpinsel 30 mm,Kleiner Pinsel für Detailarbeiten,stk,1,2.5,True
-sku_eimer_12l,Farbeimer 12 L,Stabile Ausführung,l,12,7.9,True
-sku_abstreifer,Eimerabstreifer Kunststoff,Zubehör zum Abstreifen von Farbrollen,stk,1,3.9,True
-sku_handschuhe_10x,Einweghandschuhe 10er Pack,Latexhandschuhe für Malerarbeiten,stk,10,5.9,True
-sku_abdeckvlies_10m2,Abdeckvlies 10 m²,Saugstarkes Vlies mit Folienunterseite,m²,10,9.9,True
-sku_abdeckvlies_25m2,Abdeckvlies 25 m²,Saugstarkes Vlies mit Folienunterseite,m²,25,17.9,True
-sku_abbeizer_1L,Abbeizer 1 L,Zum Entfernen alter Farbschichten,l,1,11.9,True
-sku_reiniger_1L,Pinselreiniger 1 L,Lösemittelhaltig zur Reinigung von Werkzeugen,l,1,8.9,True
-sku_maleracryl_310ml,Maleracryl 310 ml,Acryl-Dichtstoff für Anschlussfugen,l,0.31,4.5,True
-sku_silikon_310ml,Sanitärsilikon 310 ml,Schimmelresistentes Silikon für Nassräume,l,0.31,6.9,True
-sku_schleifpapier_10x,Schleifpapier K120 10er Pack,Feinschliff vor dem Anstrich,stk,10,5.9,True
-sku_grundierung_1L,Haftgrund 1 L,Grundierung für Holz und Metall,l,1,9.5,True
-sku_grundierung_5L,Haftgrund 5 L,Grundierung für Holz und Metall,l,5,34.5,True
-sku_rolle_bügel_set,Farbrollen-Set 25 cm mit Bügel,Komplettset Rolle + Griff,stk,1,9.9,True
-sku_verlängerung_2m,Teleskopstange 2 m,Verlängerungsstange für Farbrolle,m,2,14.9,True
-sku_verlängerung_4m,Teleskopstange 4 m,Verlängerungsstange für hohe Wände,m,4,19.9,True
-sku_eckpinsel_angled,Eckpinsel 35 mm,Schrägpinsel für präzises Arbeiten an Kanten,stk,1,3.9,True
-sku_abdeckband_uv,UV-Beständiges Abdeckband,Für Außenarbeiten,m,50,4.9,True
-sku_dsp_grau_10,Dispersionsfarbe grau 10 L,Innenfarbe (grauer Farbton),l,10,62.9,True
-sku_dsp_hellgrau_10,Dispersionsfarbe hellgrau 10 L,Innenfarbe (hellgrauer Farbton),l,10,62.9,True
+sku,name,description,unit,volume_l,price_eur,active,category,material_type,unit_package,tags
+sku_dsp_10,Dispersionsfarbe weiß,Innenfarbe,l,10,59.9,True,paint,dispersion_paint_white,Eimer,"innen;weiß;wand;dispersionsfarbe"
+sku_dsp_5,Dispersionsfarbe weiß 5L,Innenfarbe,l,5,34.9,True,paint,dispersion_paint_white,Eimer,"innen;weiß;wand;dispersionsfarbe;klein"
+sku_dsp_bunt,Dispersionsfarbe bunt,Abtönfarbe für Innenbereich,l,5,36.9,True,paint,dispersion_paint_colored,Eimer,"innen;bunt;abtönfarbe;wand"
+sku_tg_10,Tiefengrund 10 L,Lösemittelfrei,l,10,24.5,True,primer,primer_wall,Eimer,"innen;lösemittelfrei;grundierung;wand"
+sku_tg_5,Tiefengrund 5 L,Lösemittelfrei,l,5,14.9,True,primer,primer_wall,Eimer,"innen;lösemittelfrei;grundierung;wand;klein"
+sku_spachtel_5kg,Feinspachtel 5 kg,Wandspachtel für Innenbereiche,kg,5,14.9,True,filler,filler_fine,Sack,"innen;spachtel;wand;fein"
+sku_spachtel_15kg,Feinspachtel 15 kg,Wandspachtel für Innenbereiche,kg,15,29.9,True,filler,filler_fine,Sack,"innen;spachtel;wand;fein;groß"
+sku_lack_1L,Acryllack weiß,Für Türen und Fenster,l,1,22.5,True,paint,acrylic_lacquer_white,Dose,"weiß;lack;türen;fenster"
+sku_lack_2_5L,Acryllack weiß 2.5L,Für Türen und Fenster,l,2.5,39.5,True,paint,acrylic_lacquer_white,Dose,"weiß;lack;türen;fenster;groß"
+sku_lack_bunt_1L,Acryllack bunt,Farblack für Innen und Außen,l,1,24.5,True,paint,acrylic_lacquer_colored,Dose,"bunt;lack;innen;außen"
+sku_klebeband_50,Kreppband 50 m,Abdeckband zum Schutz von Kanten,m,50,3.5,True,tape,tape_krepp,Rolle,"kreppband;abklebeband;kanten;innen"
+sku_klebeband_25,Kreppband 25 m,Abdeckband für schmale Kanten,m,25,2.9,True,tape,tape_krepp,Rolle,"kreppband;abklebeband;schmal;kanten"
+sku_folie_20m2,Abdeckfolie 20 m²,Transparente Malerfolie,m²,20,4.9,True,foil,foil_cover,Rolle,"folie;abdeckung;boden;standard"
+sku_folie_50m2,Abdeckfolie 50 m²,Transparente Malerfolie,m²,50,8.9,True,foil,foil_cover,Rolle,"folie;abdeckung;boden;groß"
+sku_rolle_25cm,Farbrolle 25 cm,Nylonrolle für glatte Flächen,stk,1,5.9,True,tools,paint_roller,Stück,"rolle;25cm;glatte-flächen"
+sku_rolle_18cm,Farbrolle 18 cm,Nylonrolle für Ecken und kleine Flächen,stk,1,4.9,True,tools,paint_roller_small,Stück,"rolle;18cm;ecken;kleine-flächen"
+sku_pinsel_50mm,Flachpinsel 50 mm,Allround-Pinsel für Acryl- und Dispersionsfarben,stk,1,3.2,True,tools,brush_flat,Stück,"pinsel;flach;50mm;allround"
+sku_pinsel_30mm,Flachpinsel 30 mm,Kleiner Pinsel für Detailarbeiten,stk,1,2.5,True,tools,brush_flat_small,Stück,"pinsel;flach;30mm;detail"
+sku_eimer_12l,Farbeimer 12 L,Stabile Ausführung,l,12,7.9,True,accessories,bucket_paint,Eimer,"eimer;12l;zubehör"
+sku_abstreifer,Eimerabstreifer Kunststoff,Zubehör zum Abstreifen von Farbrollen,stk,1,3.9,True,accessories,bucket_scraper,Stück,"abstreifer;eimer;zubehör"
+sku_handschuhe_10x,Einweghandschuhe 10er Pack,Latexhandschuhe für Malerarbeiten,stk,10,5.9,True,consumables,gloves_disposable,Pack,"handschuhe;einweg;schutz"
+sku_abdeckvlies_10m2,Abdeckvlies 10 m²,Saugstarkes Vlies mit Folienunterseite,m²,10,9.9,True,foil,cover_fleece,Rolle,"vlies;abdeckung;boden;10m2"
+sku_abdeckvlies_25m2,Abdeckvlies 25 m²,Saugstarkes Vlies mit Folienunterseite,m²,25,17.9,True,foil,cover_fleece,Rolle,"vlies;abdeckung;boden;25m2"
+sku_abbeizer_1L,Abbeizer 1 L,Zum Entfernen alter Farbschichten,l,1,11.9,True,cleaning,paint_stripper,Dose,"abbeizer;altanstrich;entfernen"
+sku_reiniger_1L,Pinselreiniger 1 L,Lösemittelhaltig zur Reinigung von Werkzeugen,l,1,8.9,True,cleaning,brush_cleaner,Dose,"pinselreiniger;lösemittel;werkzeug"
+sku_maleracryl_310ml,Maleracryl 310 ml,Acryl-Dichtstoff für Anschlussfugen,l,0.31,4.5,True,sealant,acryl_sealant,Kartusche,"maleracryl;fugen;innen"
+sku_silikon_310ml,Sanitärsilikon 310 ml,Schimmelresistentes Silikon für Nassräume,l,0.31,6.9,True,sealant,silicone_sealant,Kartusche,"silikon;sanitär;nassräume"
+sku_schleifpapier_10x,Schleifpapier K120 10er Pack,Feinschliff vor dem Anstrich,stk,10,5.9,True,abrasive,sandpaper_k120,Pack,"schleifpapier;k120;feinschliff"
+sku_grundierung_1L,Haftgrund 1 L,Grundierung für Holz und Metall,l,1,9.5,True,primer,primer_universal,Dose,"haftgrund;holz;metall"
+sku_grundierung_5L,Haftgrund 5 L,Grundierung für Holz und Metall,l,5,34.5,True,primer,primer_universal,Eimer,"haftgrund;holz;metall;groß"
+sku_rolle_bügel_set,Farbrollen-Set 25 cm mit Bügel,Komplettset Rolle + Griff,stk,1,9.9,True,tools,paint_roller_set,Set,"rolle;25cm;bügel;set"
+sku_verlängerung_2m,Teleskopstange 2 m,Verlängerungsstange für Farbrolle,m,2,14.9,True,tools,extension_pole,Stange,"teleskopstange;2m;verlängerung"
+sku_verlängerung_4m,Teleskopstange 4 m,Verlängerungsstange für hohe Wände,m,4,19.9,True,tools,extension_pole,Stange,"teleskopstange;4m;verlängerung"
+sku_eckpinsel_angled,Eckpinsel 35 mm,Schrägpinsel für präzises Arbeiten an Kanten,stk,1,3.9,True,tools,brush_angle,Stück,"pinsel;ecke;35mm;präzision"
+sku_abdeckband_uv,UV-Beständiges Abdeckband,Für Außenarbeiten,m,50,4.9,True,tape,tape_uv,Rolle,"abklebeband;uv-beständig;außen"
+sku_dsp_grau_10,Dispersionsfarbe grau 10 L,Innenfarbe (grauer Farbton),l,10,62.9,True,paint,dispersion_paint_gray,Eimer,"innen;grau;wand;dispersionsfarbe"
+sku_dsp_hellgrau_10,Dispersionsfarbe hellgrau 10 L,Innenfarbe (hellgrauer Farbton),l,10,62.9,True,paint,dispersion_paint_lightgray,Eimer,"innen;hellgrau;wand;dispersionsfarbe"

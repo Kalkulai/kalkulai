@@ -37,7 +37,7 @@ def _apply_offer_postprocess(positions):
 
     harmonized = []
     for pos in positions:
-        pos2, reasons = harmonize_material_line(pos)
+        pos2, reasons, _ = harmonize_material_line(pos)
         if reasons:
             pos2.setdefault("reasons", []).extend(reasons)
         try:
@@ -51,26 +51,29 @@ def _apply_offer_postprocess(positions):
 
 def test_harmonize_paint_pack_to_base():
     line = {"name": "Dispersionsfarbe weiß 10 L", "menge": 3, "einheit": "Eimer"}
-    updated, reasons = harmonize_material_line(line)
+    updated, reasons, conversion = harmonize_material_line(line)
     assert updated["menge"] == 30.0
     assert updated["einheit"] == "L"
     assert "pack_to_base" in reasons
+    assert conversion and conversion["factor"] == pytest.approx(10.0)
 
 
 def test_harmonize_tape_roll_to_meters():
     line = {"name": "Malerkrepp 50 m", "menge": 2, "einheit": "Rolle"}
-    updated, reasons = harmonize_material_line(line)
+    updated, reasons, conversion = harmonize_material_line(line)
     assert pytest.approx(updated["menge"], rel=1e-6) == 100.0
     assert updated["einheit"] == "m"
     assert "pack_to_base" in reasons
+    assert conversion and conversion["factor"] == pytest.approx(50.0)
 
 
 def test_harmonize_primer_single_pack():
     line = {"name": "Tiefgrund 10 L", "menge": 1, "einheit": "Eimer"}
-    updated, reasons = harmonize_material_line(line)
+    updated, reasons, conversion = harmonize_material_line(line)
     assert updated["menge"] == 10.0
     assert updated["einheit"] == "L"
     assert "pack_to_base" in reasons
+    assert conversion and conversion["factor"] == pytest.approx(10.0)
 
 
 def test_rank_main_fallback_assigns_sku(monkeypatch):
@@ -85,7 +88,7 @@ def test_rank_main_fallback_assigns_sku(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(main, "rank_main", _fake_rank)
+    monkeypatch.setattr(main, "rank_main", _fake_rank, raising=False)
 
     positions = [
         {"name": "Haftgrund", "menge": 1, "einheit": "Eimer", "epreis": 0.0, "gesamtpreis": 0.0},

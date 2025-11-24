@@ -12,11 +12,12 @@ striprtf>=0.0.24,<0.1
 pydyf>=0.9,<0.11  # 0.11+ bricht WeasyPrint 61 wegen neuer __init__-Signatur
 
 # --- LangChain-Ökosystem (ohne direktes 'langchain'!)
-langchain>=0.3.0,<0.4
 langchain-community>=0.2.0,<0.3
 langchain-openai>=0.1.8,<0.2
+langchain-ollama>=0.1.3,<0.4
+langchain-huggingface>=0.0.3,<0.1
 docarray>=0.40.0,<0.41
 
 # --- Vektor-DB / Embeddings / API ---
-# sentence-transformers>=3.0.1,<4.0  # Kommentiert: Nur für lokale Embeddings nötig
+sentence-transformers>=3.0.1,<4.0
 openai>=1.35.10,<2.0
