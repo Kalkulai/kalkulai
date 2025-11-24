@@ -700,6 +700,50 @@ def _match_catalog_entry(
                 }
             )
 
+    # Enhanced fuzzy matching as final fallback
+    if not result["matched"]:
+        try:
+            from backend.shared.fuzzy_matcher import find_best_matches
+            
+            # Get all catalog product names
+            catalog_names = [item.get("name") for item in ctx.catalog_items if item.get("name")]
+            
+            # Try fuzzy matching with threshold 0.25
+            fuzzy_matches = find_best_matches(cleaned, catalog_names, top_k=5, min_score=0.25)
+            
+            if fuzzy_matches:
+                best_match_name, best_score = fuzzy_matches[0]
+                
+                # Find the full catalog entry
+                matched_entry = None
+                for item in ctx.catalog_items:
+                    if item.get("name") == best_match_name:
+                        matched_entry = item
+                        break
+                
+                if matched_entry:
+                    # Check type compatibility
+                    product_type = _classify_product_entry(matched_entry)
+                    if _is_type_compatible(requested_type, product_type, context_text):
+                        result.update({
+                            "matched": True,
+                            "match_type": "fuzzy_enhanced",
+                            "confidence": best_score,
+                            "canonical_name": best_match_name,
+                            "sku": matched_entry.get("sku"),
+                        })
+                
+                # Add all fuzzy matches as suggestions
+                for match_name, match_score in fuzzy_matches:
+                    if match_name not in result["suggestions"]:
+                        result["suggestions"].append(match_name)
+        except ImportError:
+            # Fuzzy matcher not available, skip
+            pass
+        except Exception:
+            # Don't let fuzzy matching break the system
+            pass
+
     return result
 
 
