@@ -3242,6 +3242,10 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
     if not positions or not isinstance(positions, list):
         raise ServiceError("positions[] required", status_code=400)
 
+    # Convert positions to package units (Stück) for PDF
+    from backend.shared.package_converter import convert_to_package_units
+    positions = convert_to_package_units(positions, ctx.catalog_by_name)
+
     for p in positions:
         try:
             menge_val = float(p.get("menge", 0))
