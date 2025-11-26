@@ -23,17 +23,17 @@ from uuid import uuid4
 
 from jinja2 import Environment
 
-from backend.app.error_messages import (
+from app.error_messages import (
     chat_unknown_products_message,
     offer_unknown_products_message,
 )
-from backend.app.uom_convert import harmonize_material_line
-from backend.app.utils import extract_json_array, extract_products_from_output, parse_positions
-from backend.retriever import index_manager
-from backend.retriever.main import rank_main as default_rank_main
-from backend.retriever.thin import search_catalog_thin as default_search_catalog_thin
-from backend.shared.normalize.text import normalize_query as shared_normalize_query
-from backend.shared.normalize.text import tokenize as shared_tokenize
+from app.uom_convert import harmonize_material_line
+from app.utils import extract_json_array, extract_products_from_output, parse_positions
+from retriever import index_manager
+from retriever.main import rank_main as default_rank_main
+from retriever.thin import search_catalog_thin as default_search_catalog_thin
+from shared.normalize.text import normalize_query as shared_normalize_query
+from shared.normalize.text import tokenize as shared_tokenize
 
 CATALOG_MATCH_THRESHOLD = 0.45
 CATALOG_STRONG_MATCH_THRESHOLD = 0.5  # Lowered from 0.6 for better fuzzy matching with dynamic catalogs
@@ -484,7 +484,7 @@ def _load_company_catalog_products(company_id: Optional[str]) -> Dict[str, Dict[
     if not company_id:
         return {}
     try:
-        from backend.store import catalog_store
+        from store import catalog_store
     except Exception:
         return {}
 
@@ -505,7 +505,7 @@ def _load_company_synonym_map(company_id: Optional[str]) -> Dict[str, str]:
     if not company_id:
         return {}
     try:
-        from backend.store import catalog_store
+        from store import catalog_store
     except Exception:
         return {}
 
@@ -703,7 +703,7 @@ def _match_catalog_entry(
     # Enhanced fuzzy matching as final fallback
     if not result["matched"]:
         try:
-            from backend.shared.fuzzy_matcher import find_best_matches
+            from shared.fuzzy_matcher import find_best_matches
             
             # Get all catalog product names
             catalog_names = [item.get("name") for item in ctx.catalog_items if item.get("name")]
@@ -3236,14 +3236,14 @@ def generate_offer_positions(
 
 
 def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceContext) -> Dict[str, Any]:
-    from backend.app.pdf import render_pdf_from_template
+    from app.pdf import render_pdf_from_template
 
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
         raise ServiceError("positions[] required", status_code=400)
 
     # Convert positions to package units (Stück) for PDF
-    from backend.shared.package_converter import convert_to_package_units
+    from shared.package_converter import convert_to_package_units
     positions = convert_to_package_units(positions, ctx.catalog_by_name)
 
     for p in positions:

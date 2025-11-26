@@ -24,7 +24,19 @@ import {
   AlertCircle
 } from "lucide-react";
 
-const emptyProduct = { sku: "", name: "", description: "", active: true };
+const emptyProduct = { 
+  sku: "", 
+  name: "", 
+  description: "", 
+  price_eur: null as number | null,
+  unit: null as string | null,
+  volume_l: null as number | null,
+  category: null as string | null,
+  material_type: null as string | null,
+  unit_package: null as string | null,
+  tags: null as string | null,
+  active: true 
+};
 
 const DatabaseManager = () => {
   const [companyId, setCompanyId] = useState("demo");
@@ -94,7 +106,19 @@ const DatabaseManager = () => {
   };
 
   const submitProduct = async (
-    payload: { sku: string; name: string; description?: string; active?: boolean }, 
+    payload: { 
+      sku: string; 
+      name: string; 
+      description?: string; 
+      price_eur?: number | null;
+      unit?: string | null;
+      volume_l?: number | null;
+      category?: string | null;
+      material_type?: string | null;
+      unit_package?: string | null;
+      tags?: string | null;
+      active?: boolean;
+    }, 
     isEdit = false
   ) => {
     if (!companyId) return;
@@ -217,6 +241,9 @@ const DatabaseManager = () => {
       let imported = 0;
       let errors = 0;
 
+      // Parse header to get column names
+      const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+      
       // Skip header, process data rows
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -228,19 +255,36 @@ const DatabaseManager = () => {
           continue;
         }
 
-        const [sku, name, description] = parts;
-        if (!sku || !name) {
+        // Map CSV columns to product object
+        const product: any = {};
+        header.forEach((col, idx) => {
+          const value = parts[idx];
+          if (!value) return;
+          
+          // Map column names to product fields
+          if (col === "sku") product.sku = value;
+          else if (col === "name") product.name = value;
+          else if (col === "description") product.description = value;
+          else if (col === "price_eur" || col === "price") product.price_eur = parseFloat(value) || null;
+          else if (col === "unit") product.unit = value;
+          else if (col === "volume_l" || col === "volume") product.volume_l = parseFloat(value) || null;
+          else if (col === "category") product.category = value;
+          else if (col === "material_type") product.material_type = value;
+          else if (col === "unit_package") product.unit_package = value;
+          else if (col === "tags") product.tags = value;
+          else if (col === "active") product.active = value.toLowerCase() === "true" || value === "1";
+        });
+
+        if (!product.sku || !product.name) {
           errors++;
           continue;
         }
 
+        // Set defaults
+        if (product.active === undefined) product.active = true;
+
         try {
-          await api.admin.upsertProduct(companyId, {
-            sku,
-            name,
-            description: description || "",
-            active: true,
-          });
+          await api.admin.upsertProduct(companyId, product);
           imported++;
         } catch (e) {
           errors++;
@@ -274,9 +318,9 @@ const DatabaseManager = () => {
 
   const exportCsv = () => {
     const csv = [
-      "SKU,Name,Beschreibung,Aktiv",
+      "sku,name,description,unit,volume_l,price_eur,active,category,material_type,unit_package,tags",
       ...products.map(p => 
-        `"${p.sku}","${p.name}","${p.description || ""}","${p.active ? "Ja" : "Nein"}"`
+        `"${p.sku}","${p.name}","${p.description || ""}","${p.unit || ""}",${p.volume_l || ""},${p.price_eur || ""},${p.active},"${p.category || ""}","${p.material_type || ""}","${p.unit_package || ""}","${p.tags || ""}"`
       )
     ].join("\n");
 
@@ -416,10 +460,25 @@ const DatabaseManager = () => {
                             Inaktiv
                           </span>
                         )}
+                        {product.category && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                            {product.category}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        SKU: {product.sku}
-                      </p>
+                      <div className="flex items-center gap-3 mb-2 text-sm text-muted-foreground">
+                        <span>SKU: {product.sku}</span>
+                        {product.price_eur && (
+                          <span className="font-medium text-foreground">
+                            {product.price_eur.toFixed(2)} €
+                          </span>
+                        )}
+                        {product.volume_l && product.unit && (
+                          <span>
+                            {product.volume_l} {product.unit}
+                          </span>
+                        )}
+                      </div>
                       {product.description && (
                         <p className="text-sm text-muted-foreground line-clamp-2">
                           {product.description}
@@ -533,7 +592,7 @@ const DatabaseManager = () => {
               <Textarea
                 value={csvContent}
                 onChange={(e) => setCsvContent(e.target.value)}
-                placeholder="SKU,Name,Beschreibung&#10;P001,Dispersionsfarbe weiß matt 10L,Hochdeckende Innenfarbe&#10;P002,Tiefgrund lösemittelfrei 10L,Grundierung für saugende Untergründe"
+                placeholder="sku,name,description,unit,volume_l,price_eur,active,category,material_type,unit_package,tags&#10;P001,Dispersionsfarbe weiß matt 10L,Hochdeckende Innenfarbe,l,10,59.9,true,paint,dispersion_paint_white,Eimer,innen;weiß;wand&#10;P002,Tiefgrund 10L,Grundierung für saugende Untergründe,l,10,24.5,true,primer,primer_wall,Eimer,innen;grundierung"
                 rows={12}
                 className="font-mono text-sm"
               />
@@ -562,9 +621,10 @@ const DatabaseManager = () => {
             <div className="p-4 rounded-lg bg-muted/50 border border-border/60">
               <h4 className="font-medium text-sm mb-2">💡 Hinweise zum Import</h4>
               <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                <li>Erste Zeile muss Header sein (wird übersprungen)</li>
-                <li>SKU und Name sind Pflichtfelder</li>
-                <li>Beschreibung ist optional</li>
+                <li>Erste Zeile muss Header sein (sku,name,description,unit,volume_l,price_eur,...)</li>
+                <li>SKU und Name sind Pflichtfelder, alle anderen optional</li>
+                <li>Preis und Volumen als Zahlen (Punkt als Dezimaltrennzeichen)</li>
+                <li>Tags mit Semikolon trennen (z.B. innen;weiß;wand)</li>
                 <li>Bestehende Produkte (gleiche SKU) werden aktualisiert</li>
               </ul>
             </div>
@@ -604,6 +664,78 @@ const DatabaseManager = () => {
                 rows={3}
               />
             </div>
+            
+            {/* Pricing & Units */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Preis (EUR)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={createForm.price_eur ?? ""}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, price_eur: e.target.value ? parseFloat(e.target.value) : null }))}
+                  placeholder="z.B. 59.90"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Einheit</Label>
+                <Input
+                  value={createForm.unit ?? ""}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, unit: e.target.value || null }))}
+                  placeholder="z.B. l, kg, m, m², stk"
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Volumen/Menge</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={createForm.volume_l ?? ""}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, volume_l: e.target.value ? parseFloat(e.target.value) : null }))}
+                placeholder="z.B. 10 (für 10L)"
+              />
+            </div>
+            
+            {/* Classification */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Kategorie</Label>
+                <Input
+                  value={createForm.category ?? ""}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, category: e.target.value || null }))}
+                  placeholder="z.B. paint, primer, tools"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Material-Typ</Label>
+                <Input
+                  value={createForm.material_type ?? ""}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, material_type: e.target.value || null }))}
+                  placeholder="z.B. dispersion_paint_white"
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Verpackung</Label>
+              <Input
+                value={createForm.unit_package ?? ""}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, unit_package: e.target.value || null }))}
+                placeholder="z.B. Eimer, Dose, Rolle, Stück"
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Tags (Semikolon-getrennt)</Label>
+              <Input
+                value={createForm.tags ?? ""}
+                onChange={(e) => setCreateForm((prev) => ({ ...prev, tags: e.target.value || null }))}
+                placeholder="z.B. innen;weiß;wand;dispersionsfarbe"
+              />
+            </div>
+            
             <div className="flex items-center justify-between">
               <Label htmlFor="create-active">Aktiv</Label>
               <Switch
@@ -660,6 +792,78 @@ const DatabaseManager = () => {
                   rows={3}
                 />
               </div>
+              
+              {/* Pricing & Units */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Preis (EUR)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={editForm.price_eur ?? ""}
+                    onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, price_eur: e.target.value ? parseFloat(e.target.value) : null }) : null)}
+                    placeholder="z.B. 59.90"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Einheit</Label>
+                  <Input
+                    value={editForm.unit ?? ""}
+                    onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, unit: e.target.value || null }) : null)}
+                    placeholder="z.B. l, kg, m, m², stk"
+                  />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Volumen/Menge</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={editForm.volume_l ?? ""}
+                  onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, volume_l: e.target.value ? parseFloat(e.target.value) : null }) : null)}
+                  placeholder="z.B. 10 (für 10L)"
+                />
+              </div>
+              
+              {/* Classification */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Kategorie</Label>
+                  <Input
+                    value={editForm.category ?? ""}
+                    onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, category: e.target.value || null }) : null)}
+                    placeholder="z.B. paint, primer, tools"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Material-Typ</Label>
+                  <Input
+                    value={editForm.material_type ?? ""}
+                    onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, material_type: e.target.value || null }) : null)}
+                    placeholder="z.B. dispersion_paint_white"
+                  />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Verpackung</Label>
+                <Input
+                  value={editForm.unit_package ?? ""}
+                  onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, unit_package: e.target.value || null }) : null)}
+                  placeholder="z.B. Eimer, Dose, Rolle, Stück"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Tags (Semikolon-getrennt)</Label>
+                <Input
+                  value={editForm.tags ?? ""}
+                  onChange={(e) => setEditForm((prev) => prev ? ({ ...prev, tags: e.target.value || null }) : null)}
+                  placeholder="z.B. innen;weiß;wand;dispersionsfarbe"
+                />
+              </div>
+              
               <div className="flex items-center justify-between">
                 <Label htmlFor="edit-active">Aktiv</Label>
                 <Switch

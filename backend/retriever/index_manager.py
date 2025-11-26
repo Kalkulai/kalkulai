@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from math import sqrt
 from datetime import datetime
 
-from backend.store import catalog_store
-from backend.store.catalog_store import get_active_products
+from store import catalog_store
+from store.catalog_store import get_active_products
 
 logger = logging.getLogger("kalkulai.index")
 
@@ -144,6 +144,12 @@ def _build_docs_without_embedding(products: List[Dict[str, Any]]) -> DocumentArr
 
 def _build_index(company_id: str) -> DocArrayExactNN:
     products = get_active_products(company_id)
+    
+    # DEBUG LOGGING
+    logger.info(f"🔍 REBUILD INDEX DEBUG: company_id={company_id}, product_count={len(products)}")
+    for p in products[:5]:  # Log first 5 products
+        logger.info(f"  - {p.get('sku')}: {p.get('name')}")
+    
     fallback_mode = not _DOCARRAY_AVAILABLE
     try:
         docs = _build_docs(products)

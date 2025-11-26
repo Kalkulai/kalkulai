@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from backend.shared.normalize import apply_synonyms, load_synonyms, normalize_query, tokenize
+from shared.normalize import apply_synonyms, load_synonyms, normalize_query, tokenize
 
 _SYN_DEFAULT_PATH = Path(__file__).resolve().parents[1] / "shared" / "normalize" / "synonyms.yaml"
 _RULE_COMPOUND = {"haft", "grund"}
@@ -529,7 +529,7 @@ def _clamp(value: float, lower: float, upper: float) -> float:
 
 def _thin_fallback_results(query: str, top_k: int) -> List[Dict[str, Any]]:
     try:
-        from backend.retriever.thin import search_catalog_thin
+        from retriever.thin import search_catalog_thin
         import backend.main as backend_main  # type: ignore
     except Exception:
         return []
@@ -588,7 +588,7 @@ def get_company_index(company_id: Optional[str] = None):
     if not target:
         return None
     try:
-        from backend.retriever import index_manager
+        from retriever import index_manager
     except Exception as exc:  # pragma: no cover
         logger.warning("Dynamic index unavailable for %s (%s)", target, exc)
         return None

@@ -167,6 +167,18 @@ export type AdminProduct = {
   sku: string;
   name: string;
   description?: string | null;
+  
+  // Pricing & Units
+  price_eur?: number | null;
+  unit?: string | null;
+  volume_l?: number | null;
+  
+  // Classification
+  category?: string | null;
+  material_type?: string | null;
+  unit_package?: string | null;
+  tags?: string | null;
+  
   active: boolean;
   updated_at?: string | null;
 };
@@ -264,7 +276,19 @@ export const api = {
       ),
     upsertProduct: (
       companyId: string,
-      product: { sku: string; name: string; description?: string; active?: boolean },
+      product: { 
+        sku: string; 
+        name: string; 
+        description?: string; 
+        price_eur?: number | null;
+        unit?: string | null;
+        volume_l?: number | null;
+        category?: string | null;
+        material_type?: string | null;
+        unit_package?: string | null;
+        tags?: string | null;
+        active?: boolean;
+      },
     ) =>
       jsonFetch<AdminProduct>(`/api/admin/products`, {
         method: "POST",
@@ -274,6 +298,13 @@ export const api = {
           sku: product.sku,
           name: product.name,
           description: product.description ?? "",
+          price_eur: product.price_eur ?? null,
+          unit: product.unit ?? null,
+          volume_l: product.volume_l ?? null,
+          category: product.category ?? null,
+          material_type: product.material_type ?? null,
+          unit_package: product.unit_package ?? null,
+          tags: product.tags ?? null,
           active: product.active ?? true,
         }),
       }),
@@ -309,6 +340,13 @@ export const api = {
           body: JSON.stringify({
             company_id: companyId,
           }),
+        }),
+      
+      // NEU: Refresh Catalog Cache (Hot-Reload ohne Backend-Neustart)
+      refreshCatalog: (companyId: string = "demo") =>
+        jsonFetch<{ status: string; products_loaded: number; indexed_by_name: number; indexed_by_sku: number }>(`/api/admin/catalog/refresh?company_id=${encodeURIComponent(companyId)}`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
         }),
     },
   };

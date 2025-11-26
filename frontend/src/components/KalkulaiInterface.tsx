@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings } from "lucide-react";
+import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -16,6 +17,10 @@ import remarkGfm from "remark-gfm";
 import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
 import DatabaseManager from "@/components/DatabaseManager";
 import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
+import OfferEditor, { OfferPosition } from "@/components/OfferEditor";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 import type {
   RevenueGuardResponse,
@@ -48,6 +53,8 @@ type UiSection = {
 type InputEntry = { id: string; text: string; ts: number };
 
 const KalkulaiInterface = () => {
+  const { user, logout, changePassword, changeEmail, updateProfile } = useAuth();
+  
   const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
@@ -58,6 +65,26 @@ const KalkulaiInterface = () => {
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isMakingPdf, setIsMakingPdf] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  
+  // Profile/Account state
+  const [profileName, setProfileName] = useState(user?.name || "");
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Email change state
+  const [newEmail, setNewEmail] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
+  const [isChangingEmail, setIsChangingEmail] = useState(false);
+  const [emailMessage, setEmailMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Angebotspositionen (final-relevant: PDF, Preise)
   const [positions, setPositions] = useState<
@@ -70,21 +97,6 @@ const KalkulaiInterface = () => {
   // Revenue Guard + Wizard-Kontext
   const [guard, setGuard] = useState<RevenueGuardResponse | null>(null);
   const [wizardCtx, setWizardCtx] = useState<any>(null);
-
-  const profileCategories = [
-    {
-      title: "Persönliche Daten",
-      description: "Kontaktdaten, Unternehmenszuordnung und Rechnungsanschrift pflegen.",
-    },
-    {
-      title: "Team & Rollen",
-      description: "Kolleg:innen einladen und Verantwortlichkeiten im Projekt festlegen.",
-    },
-    {
-      title: "Zugangsdaten",
-      description: "E-Mail, Passwort und Zwei-Faktor-Authentifizierung verwalten.",
-    },
-  ];
 
   const settingsCategories = [
     {
@@ -465,6 +477,31 @@ const KalkulaiInterface = () => {
   const chatSection = sections.find((s) => s.source === "chat");
   const supportingSections = sections.filter((s) => s.source !== "chat");
 
+  // Editor handlers
+  const handleStartEditing = () => {
+    if (positions.length > 0) {
+      setIsEditing(true);
+    }
+  };
+
+  const handleSaveEdits = (updatedPositions: OfferPosition[]) => {
+    setPositions(updatedPositions);
+    setIsEditing(false);
+    setSections((prev) => [
+      ...prev,
+      mkSection({
+        title: "Angebot aktualisiert",
+        subtitle: "Änderungen übernommen",
+        description: `Das Angebot enthält jetzt **${updatedPositions.length} Positionen**. Du kannst nun das PDF erstellen.`,
+        source: "system",
+      }),
+    ]);
+  };
+
+  const handleCancelEditing = () => {
+    setIsEditing(false);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -525,14 +562,25 @@ const KalkulaiInterface = () => {
                     variant="ghost"
                     className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
                   >
-                    <UserCircle className="h-5 w-5" />
-                    <span className="hidden sm:inline">Profil</span>
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                      <span className="text-sm font-semibold text-primary">
+                        {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <span className="hidden sm:inline max-w-[120px] truncate">
+                      {user?.name || user?.email || "Profil"}
+                    </span>
                     <ChevronDown className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuContent align="end" className="w-56">
+                  <div className="px-3 py-2 border-b border-border">
+                    <p className="text-sm font-medium truncate">{user?.name || "Benutzer"}</p>
+                    <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                  </div>
                   <DropdownMenuItem
                     onSelect={() => setIsProfileDialogOpen(true)}
+                    className="mt-1"
                   >
                     <User className="mr-2 h-4 w-4" />
                     <span>Mein Profil</span>
@@ -542,6 +590,14 @@ const KalkulaiInterface = () => {
                   >
                     <Settings className="mr-2 h-4 w-4" />
                     <span>Einstellungen</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={logout}
+                    className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    <span>Abmelden</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -641,146 +697,458 @@ const KalkulaiInterface = () => {
           {/* Right */}
           <div className="space-y-4">
             <Card className={`p-7 lg:p-9 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
-              {/* Kopf */}
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
-                  <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
-                </div>
-                <Button
-                  variant="outline"
-                  disabled={isMakingPdf || positions.length === 0}
-                  onClick={handleMakePdf}
-                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
-                </Button>
-              </div>
+              {isEditing ? (
+                /* Editor Mode */
+                <OfferEditor
+                  positions={positions}
+                  onSave={handleSaveEdits}
+                  onCancel={handleCancelEditing}
+                />
+              ) : (
+                <>
+                  {/* Kopf */}
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
+                      <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      disabled={isMakingPdf || positions.length === 0}
+                      onClick={handleMakePdf}
+                      title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                    </Button>
+                  </div>
 
-              {/* Scrollbarer Content-Bereich */}
-              <div className="flex-1 overflow-y-auto">
-                {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-                      <p className="text-muted-foreground">Analysiere Eingabe…</p>
+                  {/* Scrollbarer Content-Bereich */}
+                  <div className="flex-1 overflow-y-auto">
+                    {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                          <p className="text-muted-foreground">Analysiere Eingabe…</p>
+                        </div>
+                      </div>
+                    ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) || positions.length > 0 ? (
+                      <div className="space-y-6">
+                        {/* Positions Preview */}
+                        {positions.length > 0 && (
+                          <div className="mb-4 border border-border rounded-lg overflow-hidden">
+                            <div className="bg-muted/50 px-4 py-2 border-b border-border">
+                              <h3 className="font-semibold text-foreground text-sm">
+                                Angebotspositionen ({positions.length})
+                              </h3>
+                            </div>
+                            <div className="divide-y divide-border max-h-[200px] overflow-y-auto">
+                              {positions.map((p, idx) => (
+                                <div key={`${p.nr}-${idx}`} className="px-4 py-2 flex justify-between items-center text-sm">
+                                  <div className="flex-1">
+                                    <span className="text-muted-foreground mr-2">{p.nr}.</span>
+                                    <span className="font-medium">{p.name}</span>
+                                  </div>
+                                  <div className="text-right text-muted-foreground">
+                                    {p.menge} {p.einheit} × {p.epreis.toFixed(2)} € = <span className="font-medium text-foreground">{((p.menge || 0) * (p.epreis || 0)).toFixed(2)} €</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="bg-muted/30 px-4 py-2 border-t border-border flex justify-between">
+                              <span className="text-sm font-medium">Netto Summe</span>
+                              <span className="font-semibold tabular-nums">
+                                {positions.reduce((sum, p) => sum + (p.menge || 0) * (p.epreis || 0), 0).toFixed(2)} €
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Revenue Guard Block */}
+                        {guard && guard.missing.length > 0 && (
+                          <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="font-semibold text-blue-900">Vergessene Posten (Wächter)</h3>
+                              <span className="text-xs text-blue-700">{guard.missing.length} Vorschlag/Vorschläge</span>
+                            </div>
+                            <ul className="space-y-2">
+                              {guard.missing.map((m) => (
+                                <li key={m.id} className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="font-medium">
+                                      {m.name}{" "}
+                                      <span className="text-xs text-muted-foreground">({m.category})</span>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {m.menge ?? "—"} {m.einheit ?? ""} &middot; {m.reason}
+                                    </div>
+                                  </div>
+                                  <Button size="sm" variant="outline" onClick={() => addSuggestion(m)}>
+                                    Übernehmen
+                                  </Button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {chatSection && (
+                          <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
+                            <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
+                            {chatSection.subtitle && (
+                              <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
+                            )}
+                            {chatSection.description && (
+                              <div className="markdown-body text-foreground text-base leading-7">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {String(chatSection.description)}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {supportingSections.map((section) => (
+                          <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
+                              <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
+                            </div>
+                            {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
+                            {section.description && (
+                              <div className="markdown-body text-sm leading-6 text-foreground">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {String(section.description)}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <p className="text-base text-muted-foreground text-center">
+                          Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer (rechts) */}
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <div className="flex gap-3 justify-center">
+                      <Button
+                        variant="outline"
+                        className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-primary/10 hover:border-primary' : 'bg-muted text-muted-foreground border-muted'}`}
+                        disabled={positions.length === 0}
+                        onClick={handleStartEditing}
+                        title={positions.length === 0 ? "Erst Positionen erstellen" : "Angebot bearbeiten"}
+                      >
+                        <Edit className="w-4 h-4 mr-2" />
+                        Bearbeiten
+                      </Button>
+                      <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
+                        <Save className="w-4 h-4 mr-2" />
+                        Speichern
+                      </Button>
                     </div>
                   </div>
-                ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) ? (
-                  <div className="space-y-6">
-                    {/* Revenue Guard Block */}
-                    {guard && guard.missing.length > 0 && (
-                      <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="font-semibold text-blue-900">Vergessene Posten (Wächter)</h3>
-                          <span className="text-xs text-blue-700">{guard.missing.length} Vorschlag/Vorschläge</span>
-                        </div>
-                        <ul className="space-y-2">
-                          {guard.missing.map((m) => (
-                            <li key={m.id} className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="font-medium">
-                                  {m.name}{" "}
-                                  <span className="text-xs text-muted-foreground">({m.category})</span>
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {m.menge ?? "—"} {m.einheit ?? ""} &middot; {m.reason}
-                                </div>
-                              </div>
-                              <Button size="sm" variant="outline" onClick={() => addSuggestion(m)}>
-                                Übernehmen
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {chatSection && (
-                      <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
-                        <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
-                        {chatSection.subtitle && (
-                          <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
-                        )}
-                        {chatSection.description && (
-                          <div className="markdown-body text-foreground text-base leading-7">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {String(chatSection.description)}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {supportingSections.map((section) => (
-                      <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
-                        <div className="flex items-center justify-between mb-1">
-                          <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
-                          <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
-                        </div>
-                        {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
-                        {section.description && (
-                          <div className="markdown-body text-sm leading-6 text-foreground">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {String(section.description)}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <p className="text-base text-muted-foreground text-center">
-                      Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer (rechts) */}
-              <div className="mt-4 pt-4 border-t border-border">
-                <div className="flex gap-3 justify-center">
-                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
-                    <Edit className="w-4 h-4 mr-2" />
-                    Bearbeiten
-                  </Button>
-                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
-                    <Save className="w-4 h-4 mr-2" />
-                    Speichern
-                  </Button>
-                </div>
-              </div>
+                </>
+              )}
             </Card>
           </div>
         </div>
       </main>
 
       {/* Dialogs */}
-      <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
-        <DialogContent className="max-w-xl space-y-6">
+      <Dialog open={isProfileDialogOpen} onOpenChange={(open) => {
+        setIsProfileDialogOpen(open);
+        if (open) {
+          setProfileName(user?.name || "");
+          setProfileMessage(null);
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+          setPasswordMessage(null);
+          setNewEmail("");
+          setEmailPassword("");
+          setEmailMessage(null);
+        }
+      }}>
+        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
           <DialogHeader className="space-y-1 text-left">
             <DialogTitle>Mein Profil</DialogTitle>
             <DialogDescription>
-              Passe deine persönlichen Angaben an und bereite dein Team auf kommende Projekte vor.
+              Verwalte deine persönlichen Daten und Zugangsdaten.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            {profileCategories.map((category) => (
-              <div
-                key={category.title}
-                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
-              >
-                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+          
+          <Tabs defaultValue="profile" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="profile">Profil</TabsTrigger>
+              <TabsTrigger value="password">Passwort</TabsTrigger>
+              <TabsTrigger value="email">E-Mail</TabsTrigger>
+            </TabsList>
+            
+            {/* Profile Tab */}
+            <TabsContent value="profile" className="mt-4 space-y-4">
+              <div className="flex items-center gap-4 p-4 bg-muted/40 rounded-lg">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <span className="text-2xl font-semibold text-primary">
+                    {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div>
+                  <p className="font-medium">{user?.name || "Kein Name"}</p>
+                  <p className="text-sm text-muted-foreground">{user?.email}</p>
+                </div>
               </div>
-            ))}
-          </div>
-          <DialogFooter className="sm:justify-between">
-            <span className="text-xs text-muted-foreground">
-              Mehr Funktionen folgen im nächsten Release.
-            </span>
+              
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="profile-name">Name</Label>
+                  <Input
+                    id="profile-name"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    placeholder="Dein Name"
+                  />
+                </div>
+                
+                {profileMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    profileMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {profileMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setIsUpdatingProfile(true);
+                    setProfileMessage(null);
+                    try {
+                      await updateProfile(profileName);
+                      setProfileMessage({ type: "success", text: "Profil erfolgreich aktualisiert" });
+                    } catch (err: any) {
+                      setProfileMessage({ type: "error", text: err.message || "Fehler beim Aktualisieren" });
+                    } finally {
+                      setIsUpdatingProfile(false);
+                    }
+                  }}
+                  disabled={isUpdatingProfile || profileName === user?.name}
+                  className="w-full"
+                >
+                  {isUpdatingProfile ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird gespeichert...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
+                      Name speichern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+            
+            {/* Password Tab */}
+            <TabsContent value="password" className="mt-4 space-y-4">
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="current-password">Aktuelles Passwort</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="current-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="pl-10 pr-10"
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords(!showPasswords)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">Neues Passwort</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="new-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Mindestens 6 Zeichen"
+                    />
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-password">Passwort bestätigen</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="confirm-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Passwort wiederholen"
+                    />
+                  </div>
+                </div>
+                
+                {passwordMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    passwordMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {passwordMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setPasswordMessage(null);
+                    
+                    if (newPassword !== confirmPassword) {
+                      setPasswordMessage({ type: "error", text: "Passwörter stimmen nicht überein" });
+                      return;
+                    }
+                    if (newPassword.length < 6) {
+                      setPasswordMessage({ type: "error", text: "Passwort muss mindestens 6 Zeichen lang sein" });
+                      return;
+                    }
+                    
+                    setIsChangingPassword(true);
+                    try {
+                      await changePassword(currentPassword, newPassword);
+                      setPasswordMessage({ type: "success", text: "Passwort erfolgreich geändert" });
+                      setCurrentPassword("");
+                      setNewPassword("");
+                      setConfirmPassword("");
+                    } catch (err: any) {
+                      setPasswordMessage({ type: "error", text: err.message || "Fehler beim Ändern" });
+                    } finally {
+                      setIsChangingPassword(false);
+                    }
+                  }}
+                  disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
+                  className="w-full"
+                >
+                  {isChangingPassword ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird geändert...
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="mr-2 h-4 w-4" />
+                      Passwort ändern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+            
+            {/* Email Tab */}
+            <TabsContent value="email" className="mt-4 space-y-4">
+              <div className="p-3 bg-muted/40 rounded-lg">
+                <p className="text-sm text-muted-foreground">
+                  Aktuelle E-Mail: <span className="font-medium text-foreground">{user?.email}</span>
+                </p>
+              </div>
+              
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="new-email">Neue E-Mail-Adresse</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="new-email"
+                      type="email"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className="pl-10"
+                      placeholder="neue@email.de"
+                    />
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="email-password">Passwort zur Bestätigung</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="email-password"
+                      type="password"
+                      value={emailPassword}
+                      onChange={(e) => setEmailPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Dein aktuelles Passwort"
+                    />
+                  </div>
+                </div>
+                
+                {emailMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    emailMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {emailMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setEmailMessage(null);
+                    setIsChangingEmail(true);
+                    try {
+                      await changeEmail(newEmail, emailPassword);
+                      setEmailMessage({ type: "success", text: "E-Mail erfolgreich geändert" });
+                      setNewEmail("");
+                      setEmailPassword("");
+                    } catch (err: any) {
+                      setEmailMessage({ type: "error", text: err.message || "Fehler beim Ändern" });
+                    } finally {
+                      setIsChangingEmail(false);
+                    }
+                  }}
+                  disabled={isChangingEmail || !newEmail || !emailPassword}
+                  className="w-full"
+                >
+                  {isChangingEmail ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird geändert...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="mr-2 h-4 w-4" />
+                      E-Mail ändern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
+          
+          <DialogFooter>
             <Button variant="outline" onClick={() => setIsProfileDialogOpen(false)}>
               Schließen
             </Button>
