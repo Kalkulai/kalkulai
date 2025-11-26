@@ -5,14 +5,17 @@ const API_BASE = RAW_BASE.replace(/\/+$/, "");
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || "";
 const ADMIN_HEADERS = ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
 
-// --- Fetch-Helper (JSON) ---
+// Fetch Helper (JSON)
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 
   const res = await fetch(url, {
-    method: "GET",
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
+    method: init?.method || "GET",
+    headers: { 
+      "Content-Type": "application/json", 
+      ...(init?.headers || {}) 
+    },
   });
 
   // Text lesen, dann versuchen JSON zu parsen
@@ -287,15 +290,25 @@ export const api = {
         method: "GET",
         headers: { ...ADMIN_HEADERS },
       }),
-    addSynonyms: (companyId: string, canon: string, variants: string[]) =>
-      jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
-        method: "POST",
-        headers: { ...ADMIN_HEADERS },
-        body: JSON.stringify({
-          company_id: companyId,
-          canon,
-          synonyms: variants,
+      addSynonyms: (companyId: string, canon: string, variants: string[]) =>
+        jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
+          body: JSON.stringify({
+            company_id: companyId,
+            canon,
+            synonyms: variants,
+          }),
         }),
-      }),
-  },
-};
+      
+      // NEU: Rebuild Index
+      rebuildIndex: (companyId: string) =>
+        jsonFetch<{ status: string; count: number }>(`/api/admin/index/rebuild`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
+          body: JSON.stringify({
+            company_id: companyId,
+          }),
+        }),
+    },
+  };
