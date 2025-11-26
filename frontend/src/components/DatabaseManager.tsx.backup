@@ -101,15 +101,6 @@ const DatabaseManager = () => {
     try {
       setLoading(true);
       await api.admin.upsertProduct(companyId, payload);
-      
-      // Auto-rebuild index after product change
-      try {
-        await api.admin.rebuildIndex(companyId);
-      } catch (indexError) {
-        console.warn("Index rebuild failed:", indexError);
-        // Don't fail the whole operation if index rebuild fails
-      }
-      
       await loadData();
       toast({
         title: isEdit ? "✓ Produkt aktualisiert" : "✓ Produkt hinzugefügt",
@@ -134,14 +125,6 @@ const DatabaseManager = () => {
     try {
       setLoading(true);
       await api.admin.deleteProduct(companyId, sku);
-      
-      // Auto-rebuild index after product deletion
-      try {
-        await api.admin.rebuildIndex(companyId);
-      } catch (indexError) {
-        console.warn("Index rebuild failed:", indexError);
-      }
-      
       await loadData();
       toast({ 
         title: "✓ Produkt deaktiviert", 
@@ -247,20 +230,13 @@ const DatabaseManager = () => {
         }
       }
 
-    // Auto-rebuild index after CSV import
-    try {
-      await api.admin.rebuildIndex(companyId);
-    } catch (indexError) {
-      console.warn("Index rebuild failed:", indexError);
-    }
-
-    await loadData();
-    setCsvContent("");
-
-    toast({
-      title: `✓ Import abgeschlossen`,
-      description: `${imported} Produkte importiert${errors > 0 ? `, ${errors} Fehler` : ""}.`,
-    });
+      await loadData();
+      setCsvContent("");
+      
+      toast({
+        title: `✓ Import abgeschlossen`,
+        description: `${imported} Produkte importiert${errors > 0 ? `, ${errors} Fehler` : ""}.`,
+      });
     } catch (e: any) {
       toast({
         title: "Fehler beim Import",
