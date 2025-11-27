@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 import backend.app.services.quote_service as qs
-from backend.app.services.quote_service import QuoteServiceContext
+from app.services.quote_service import QuoteServiceContext
 
 _CONTEXT: QuoteServiceContext | None = None
 _STATE: Dict[str, Any] = {
