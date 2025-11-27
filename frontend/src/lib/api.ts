@@ -32,7 +32,16 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    const detail = data?.detail ? ` – ${data.detail}` : "";
+    // Handle structured error objects (e.g. {error: "unknown_products", message: "..."})
+    let detail = "";
+    if (data?.detail) {
+      if (typeof data.detail === "object") {
+        // Extract message from structured error object
+        detail = ` – ${data.detail.message || JSON.stringify(data.detail)}`;
+      } else {
+        detail = ` – ${data.detail}`;
+      }
+    }
     throw new Error(`HTTP ${res.status}${detail}`);
   }
 
@@ -183,6 +192,43 @@ export type AdminProduct = {
   updated_at?: string | null;
 };
 export type SynonymMap = Record<string, string[]>;
+
+// Offers (Bibliothek)
+export type Offer = {
+  id: number;
+  user_id: number;
+  title: string;
+  kunde: string | null;
+  positions: OfferPosition[];
+  notes: string | null;
+  status: "draft" | "sent" | "accepted" | "rejected";
+  netto_summe: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OffersListResponse = {
+  offers: Offer[];
+};
+
+export type OfferDetailResponse = {
+  offer: Offer;
+};
+
+export type CreateOfferData = {
+  title: string;
+  kunde?: string;
+  positions: OfferPosition[];
+  notes?: string;
+};
+
+export type UpdateOfferData = {
+  title?: string;
+  kunde?: string;
+  positions?: OfferPosition[];
+  notes?: string;
+  status?: string;
+};
 
 // ------------------------------------------------------------
 //                        API-Client
@@ -347,6 +393,47 @@ export const api = {
         jsonFetch<{ status: string; products_loaded: number; indexed_by_name: number; indexed_by_sku: number }>(`/api/admin/catalog/refresh?company_id=${encodeURIComponent(companyId)}`, {
           method: "POST",
           headers: { ...ADMIN_HEADERS },
+        }),
+    },
+    
+    // --- Offers (Bibliothek) ---
+    offers: {
+      list: (token: string, status?: string) => {
+        const params = status ? `?status=${encodeURIComponent(status)}` : "";
+        return jsonFetch<OffersListResponse>(`/api/offers${params}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      },
+      
+      get: (token: string, offerId: number) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      
+      create: (token: string, data: CreateOfferData) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(data),
+        }),
+      
+      update: (token: string, offerId: number, data: UpdateOfferData) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(data),
+        }),
+      
+      delete: (token: string, offerId: number) =>
+        jsonFetch<{ success: boolean }>(`/api/offers/${offerId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      
+      duplicate: (token: string, offerId: number) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}/duplicate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
         }),
     },
   };

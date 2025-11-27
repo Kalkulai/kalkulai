@@ -43,6 +43,7 @@ from app.services.quote_service import (
 from app import admin_api
 from app import auth_api
 from app import auth
+from app import offers_api
 from app.services import quote_service as _quote_service_module
 from retriever.thin import search_catalog_thin as _thin_search_catalog
 from store import catalog_store
@@ -262,10 +263,15 @@ def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, An
             items.append({
                 "sku": prod.get("sku"),
                 "name": prod.get("name"),
-                "unit": None,
+                "unit": prod.get("unit"),
+                "volume_l": prod.get("volume_l"),
+                "price_eur": prod.get("price_eur"),
                 "pack_sizes": None,
                 "synonyms": [],
-                "category": None,
+                "category": prod.get("category"),
+                "material_type": prod.get("material_type"),
+                "unit_package": prod.get("unit_package"),
+                "tags": prod.get("tags"),
                 "brand": None,
                 "description": prod.get("description"),
                 "raw": f"{prod.get('name')} - {prod.get('description', '')}",
@@ -366,6 +372,7 @@ def _initialize_database() -> None:
         return
     catalog_store.init_db()
     auth.init_auth_tables()
+    offers_api.init_offers_table()
     _DB_INITIALIZED = True
 
 
@@ -518,6 +525,7 @@ async def _cors_echo_middleware(request, call_next):
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
 app.include_router(auth_api.router)
+app.include_router(offers_api.router)
 
 # Root (Health)
 @app.get("/")

@@ -2137,7 +2137,7 @@ def rule_scratch_spackle(positions: list[dict], ctx_dict: dict) -> Tuple[bool, d
 
 def rule_travel(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
     """Anfahrtpauschale."""
-    if _has_any(positions, ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung"]):
+    if _has_any(positions, ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung", "fahrt"]):
         return False, None
 
     dist = _ctx_num(ctx_dict, "entfernung_km", 0.0)
@@ -2155,53 +2155,372 @@ def rule_travel(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | Non
     return True, sug
 
 
+# ============================================================================
+# NEUE REGELN FÜR TYPISCHE MALER-ARBEITEN
+# ============================================================================
+
+def rule_sanding(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Schleifarbeiten vor dem Streichen."""
+    if _has_any(positions, ["schleifen", "schleifpapier", "anschleifen", "schliff", "schleifvlies"]):
+        return False, None
+    
+    untergrund = _norm(ctx_dict.get("untergrund", ""))
+    # Nur warnen bei Altanstrich, Holz oder lackierten Flächen
+    if not any(token in untergrund for token in ["altanstrich", "lack", "holz", "fenster", "tür"]):
+        return False, None
+    
+    flaeche = max(1.0, _ctx_num(ctx_dict, "flaeche_m2", 0.0))
+    bogen = max(1, math.ceil(flaeche / 5.0))  # 1 Bogen pro 5m²
+    sug = {
+        "id": "sanding",
+        "name": "Schleifpapier / Schleifvlies",
+        "menge": bogen,
+        "einheit": "Bogen",
+        "reason": f"Untergrund '{ctx_dict.get('untergrund')}' → Anschleifen für bessere Haftung (≈1 Bogen / 5 m²).",
+        "confidence": 0.7,
+        "severity": "medium",
+        "category": "Vorarbeiten",
+    }
+    return True, sug
+
+
+def rule_paint_tools(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Farbrollen & Pinsel als Verschleißmaterial."""
+    if _has_any(positions, ["rolle", "farbrolle", "pinsel", "flachpinsel", "heizkörperpinsel"]):
+        return False, None
+    
+    # Nur warnen wenn Farbe vorhanden
+    if not _has_any(positions, ["farbe", "lack", "dispersionsfarbe", "latexfarbe", "acryl", "lasur"]):
+        return False, None
+    
+    flaeche = max(1.0, _ctx_num(ctx_dict, "flaeche_m2", 0.0))
+    rollen = max(1, math.ceil(flaeche / 50.0))  # 1 Rolle pro 50m²
+    sug = {
+        "id": "paint_tools",
+        "name": "Farbrolle + Pinsel-Set",
+        "menge": rollen,
+        "einheit": "Set",
+        "reason": f"{int(flaeche)} m² Fläche → Verschleißmaterial (≈1 Set / 50 m²).",
+        "confidence": 0.6,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+def rule_protection_gloves(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Schutzhandschuhe bei Lackier-/Reinigungsarbeiten."""
+    if _has_any(positions, ["handschuhe", "schutzhandschuhe", "nitrilhandschuhe", "einweghandschuhe"]):
+        return False, None
+    
+    # Nur warnen bei Lacken, Lösemitteln oder Reinigern
+    needs_protection = _has_any(positions, ["lack", "lasur", "verdünnung", "abbeizer", "reiniger", "lösemittel"])
+    if not needs_protection:
+        return False, None
+    
+    sug = {
+        "id": "protection_gloves",
+        "name": "Schutzhandschuhe (Nitril)",
+        "menge": 1,
+        "einheit": "Pack",
+        "reason": "Lackier-/Lösemittelarbeiten → Hautschutz empfohlen.",
+        "confidence": 0.65,
+        "severity": "medium",
+        "category": "Arbeitsschutz",
+    }
+    return True, sug
+
+
+def rule_dust_mask(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Staubschutzmaske bei Schleif-/Spachtelarbeiten."""
+    if _has_any(positions, ["maske", "atemschutz", "staubmaske", "ffp2", "mundschutz"]):
+        return False, None
+    
+    # Nur warnen bei staubigen Arbeiten
+    needs_mask = _has_any(positions, ["schleifen", "spachtel", "abbeizer", "entfernen"]) or \
+                 any(token in _norm(ctx_dict.get("untergrund", "")) for token in ["tapete", "altanstrich"])
+    if not needs_mask:
+        return False, None
+    
+    sug = {
+        "id": "dust_mask",
+        "name": "Staubschutzmaske FFP2",
+        "menge": 1,
+        "einheit": "Pack",
+        "reason": "Schleif-/Spachtelarbeiten → Atemschutz empfohlen.",
+        "confidence": 0.6,
+        "severity": "low",
+        "category": "Arbeitsschutz",
+    }
+    return True, sug
+
+
+def rule_cleaning_supplies(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Reinigungsmittel/Pinselreiniger."""
+    if _has_any(positions, ["reiniger", "pinselreiniger", "verdünnung", "waschbenzin"]):
+        return False, None
+    
+    # Nur warnen bei Lacken (nicht bei wasserbasierten Farben)
+    if not _has_any(positions, ["lack", "lasur", "kunstharz", "alkydharz"]):
+        return False, None
+    
+    sug = {
+        "id": "cleaning_supplies",
+        "name": "Pinselreiniger / Verdünnung",
+        "menge": 1,
+        "einheit": "L",
+        "reason": "Lackarbeiten → Reinigungsmittel für Werkzeuge.",
+        "confidence": 0.5,
+        "severity": "low",
+        "category": "Reinigung",
+    }
+    return True, sug
+
+
+def rule_sealant(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Maleracryl/Silikon für Fugen und Anschlüsse."""
+    if _has_any(positions, ["acryl", "silikon", "fugen", "maleracryl", "dichtstoff"]):
+        return False, None
+    
+    besonderheiten = _norm(ctx_dict.get("besonderheiten", ""))
+    raum = _norm(ctx_dict.get("raum", ""))
+    
+    # Warnen bei Bad/Küche oder wenn Fenster/Türen erwähnt
+    needs_sealant = any(token in raum for token in ["bad", "küche", "nassraum"]) or \
+                    any(token in besonderheiten for token in ["fenster", "tür", "anschluss", "fuge"])
+    if not needs_sealant:
+        return False, None
+    
+    sug = {
+        "id": "sealant",
+        "name": "Maleracryl / Fugendichtstoff",
+        "menge": 1,
+        "einheit": "Kartusche",
+        "reason": f"Raum/Bereich '{ctx_dict.get('raum', 'unbekannt')}' → Fugenabdichtung empfohlen.",
+        "confidence": 0.55,
+        "severity": "medium",
+        "category": "Abdichtung",
+    }
+    return True, sug
+
+
+def rule_paint_bucket(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Farbeimer & Abstreifgitter."""
+    if _has_any(positions, ["farbeimer", "eimer", "abstreifgitter", "farbwanne"]):
+        return False, None
+    
+    # Nur warnen wenn größere Flächen gestrichen werden
+    flaeche = _ctx_num(ctx_dict, "flaeche_m2", 0.0)
+    if flaeche < 20:  # Unter 20m² nicht nötig
+        return False, None
+    
+    sug = {
+        "id": "paint_bucket",
+        "name": "Farbeimer mit Abstreifgitter",
+        "menge": 1,
+        "einheit": "Set",
+        "reason": f"{int(flaeche)} m² Fläche → Farbeimer für effizientes Arbeiten.",
+        "confidence": 0.5,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+def rule_stirring_stick(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Rührstab für größere Farbmengen."""
+    if _has_any(positions, ["rührstab", "rührquirl", "mischer", "rühren"]):
+        return False, None
+    
+    # Nur warnen wenn viel Farbe benötigt wird
+    flaeche = _ctx_num(ctx_dict, "flaeche_m2", 0.0)
+    if flaeche < 50:  # Unter 50m² nicht nötig
+        return False, None
+    
+    sug = {
+        "id": "stirring_stick",
+        "name": "Rührstab / Rührquirl",
+        "menge": 1,
+        "einheit": "Stück",
+        "reason": f"Große Farbmengen ({int(flaeche)} m²) → Farbe gründlich aufrühren.",
+        "confidence": 0.4,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+# ============================================================================
+# REGEL-REGISTRY
+# ============================================================================
+
 REVENUE_RULES = [
+    # Vorarbeiten (wichtig!)
     ("primer_tiefgrund", "Grundierung/Haftverbesserung fehlt?", rule_primer_tiefgrund),
-    ("masking_cover", "Abdecken/Schutz fehlt?", rule_masking_cover),
+    ("scratch_spackle", "Spachtelarbeiten fehlen?", rule_scratch_spackle),
+    ("sanding", "Schleifarbeiten fehlen?", rule_sanding),
+    
+    # Abdecken & Schutz
+    ("masking_cover", "Abdeckmaterial fehlt?", rule_masking_cover),
     ("masking_tape", "Abklebeband fehlt?", rule_masking_tape),
-    ("scratch_spackle", "Spachtelarbeiten (Kratz-/Zwischenspachtelung) fehlen?", rule_scratch_spackle),
+    
+    # Werkzeuge & Verbrauchsmaterial
+    ("paint_tools", "Farbrollen/Pinsel fehlen?", rule_paint_tools),
+    ("paint_bucket", "Farbeimer fehlt?", rule_paint_bucket),
+    ("stirring_stick", "Rührstab fehlt?", rule_stirring_stick),
+    
+    # Arbeitsschutz
+    ("protection_gloves", "Schutzhandschuhe fehlen?", rule_protection_gloves),
+    ("dust_mask", "Atemschutz fehlt?", rule_dust_mask),
+    
+    # Abdichtung & Reinigung
+    ("sealant", "Fugenabdichtung fehlt?", rule_sealant),
+    ("cleaning_supplies", "Reinigungsmittel fehlen?", rule_cleaning_supplies),
+    
+    # Allgemeines
     ("travel", "Anfahrtpauschale fehlt?", rule_travel),
 ]
 
 BUILTIN_GUARD_ITEMS: List[Dict[str, Any]] = [
+    # Vorarbeiten
     {
         "id": "primer_tiefgrund",
         "name": "Tiefgrund / Grundierung",
-        "severity": "medium",
+        "keywords": ["tiefgrund", "grundierung", "primer", "haftgrund"],
+        "severity": "high",
         "category": "Vorarbeiten",
-        "description": "Empfiehlt saugfähige Grundierung, wenn Untergrund oder Positionen keine Haftbrücke enthalten.",
+        "description": "Prüft ob eine Grundierung für saugende Untergründe vorhanden ist.",
+        "einheit": "L",
         "editable": True,
     },
     {
-        "id": "masking_cover",
-        "name": "Abdeckmaterial",
+        "id": "scratch_spackle",
+        "name": "Spachtelmasse",
+        "keywords": ["spachtel", "spachtelmasse", "kratzspachtel", "feinspachtel"],
         "severity": "medium",
-        "category": "Schutz",
-        "description": "Überprüft, ob Folien/Vlies zum Abdecken empfindlicher Bereiche vorgesehen sind.",
+        "category": "Vorarbeiten",
+        "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder unebenen Flächen vor.",
+        "einheit": "kg",
+        "editable": True,
+    },
+    {
+        "id": "sanding",
+        "name": "Schleifarbeiten",
+        "keywords": ["schleifen", "schleifpapier", "anschleifen", "schleifvlies"],
+        "severity": "medium",
+        "category": "Vorarbeiten",
+        "description": "Empfiehlt Anschleifen bei Altanstrichen, Lack oder Holz.",
+        "einheit": "Bogen",
+        "editable": True,
+    },
+    
+    # Abdecken & Schutz
+    {
+        "id": "masking_cover",
+        "name": "Abdeckfolie / Vlies",
+        "keywords": ["abdeckfolie", "abdeckvlies", "abdecken", "schutzfolie", "folie"],
+        "severity": "medium",
+        "category": "Abdecken",
+        "description": "Prüft ob Abdeckmaterial zum Schutz von Böden vorhanden ist.",
+        "einheit": "Rolle",
         "editable": True,
     },
     {
         "id": "masking_tape",
         "name": "Abklebeband / Kreppband",
+        "keywords": ["abklebeband", "kreppband", "abkleben", "malerkrepp", "goldband"],
         "severity": "high",
-        "category": "Schutz",
-        "description": "Empfiehlt Kreppband in passenden Rollenlängen relativ zur Kantenmeterzahl.",
+        "category": "Abdecken",
+        "description": "Empfiehlt Kreppband für saubere Kanten an Fenstern, Türen und Ecken.",
+        "einheit": "Rolle",
+        "editable": True,
+    },
+    
+    # Werkzeuge
+    {
+        "id": "paint_tools",
+        "name": "Farbrollen & Pinsel",
+        "keywords": ["rolle", "farbrolle", "pinsel", "flachpinsel", "streichwerkzeug"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Prüft ob Streichwerkzeuge als Verschleißmaterial eingeplant sind.",
+        "einheit": "Set",
         "editable": True,
     },
     {
-        "id": "scratch_spackle",
-        "name": "Zwischenspachtelung",
-        "severity": "medium",
-        "category": "Vorarbeiten",
-        "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder Tapeten vor.",
+        "id": "paint_bucket",
+        "name": "Farbeimer & Gitter",
+        "keywords": ["farbeimer", "eimer", "abstreifgitter", "farbwanne"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Empfiehlt Farbeimer bei größeren Streichflächen.",
+        "einheit": "Set",
         "editable": True,
     },
+    {
+        "id": "stirring_stick",
+        "name": "Rührstab / Mischer",
+        "keywords": ["rührstab", "rührquirl", "mischer"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Empfiehlt Rührwerkzeug bei großen Farbmengen.",
+        "einheit": "Stück",
+        "editable": True,
+    },
+    
+    # Arbeitsschutz
+    {
+        "id": "protection_gloves",
+        "name": "Schutzhandschuhe",
+        "keywords": ["handschuhe", "schutzhandschuhe", "nitrilhandschuhe", "einweghandschuhe"],
+        "severity": "medium",
+        "category": "Arbeitsschutz",
+        "description": "Empfiehlt Hautschutz bei Lacken und Lösemitteln.",
+        "einheit": "Pack",
+        "editable": True,
+    },
+    {
+        "id": "dust_mask",
+        "name": "Atemschutzmaske",
+        "keywords": ["maske", "atemschutz", "staubmaske", "ffp2", "mundschutz"],
+        "severity": "low",
+        "category": "Arbeitsschutz",
+        "description": "Empfiehlt Atemschutz bei Schleif- und Spachtelarbeiten.",
+        "einheit": "Pack",
+        "editable": True,
+    },
+    
+    # Abdichtung & Reinigung
+    {
+        "id": "sealant",
+        "name": "Maleracryl / Silikon",
+        "keywords": ["acryl", "silikon", "fugen", "maleracryl", "dichtstoff", "kartusche"],
+        "severity": "medium",
+        "category": "Abdichtung",
+        "description": "Empfiehlt Fugenabdichtung in Nassräumen und bei Fenster-/Türanschlüssen.",
+        "einheit": "Kartusche",
+        "editable": True,
+    },
+    {
+        "id": "cleaning_supplies",
+        "name": "Reinigungsmittel",
+        "keywords": ["reiniger", "pinselreiniger", "verdünnung", "waschbenzin"],
+        "severity": "low",
+        "category": "Reinigung",
+        "description": "Empfiehlt Reinigungsmittel für Werkzeuge bei Lackarbeiten.",
+        "einheit": "L",
+        "editable": True,
+    },
+    
+    # Allgemeines
     {
         "id": "travel",
         "name": "Anfahrtpauschale",
+        "keywords": ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung"],
         "severity": "low",
-        "category": "Allgemein",
-        "description": "Stellt sicher, dass Fahrtkosten bzw. Pauschalen eingeplant sind.",
+        "category": "Allgemeines",
+        "description": "Stellt sicher, dass Fahrtkosten eingeplant sind.",
+        "einheit": "Pauschale",
         "editable": True,
     },
 ]
@@ -3190,6 +3509,17 @@ def generate_offer_positions(
             original_epreis = float(pos.get("epreis", 0))
         except (TypeError, ValueError):
             original_epreis = 0.0
+        
+        # NEU: Wenn kein Preis vorhanden, aus der Datenbank laden
+        if original_epreis <= 0 and entry:
+            db_price = entry.get("price_eur")
+            if db_price is not None:
+                try:
+                    original_epreis = float(db_price)
+                    pos["epreis"] = original_epreis
+                except (TypeError, ValueError):
+                    pass
+        
         try:
             original_total = float(pos.get("gesamtpreis", 0))
         except (TypeError, ValueError):

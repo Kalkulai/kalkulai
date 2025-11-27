@@ -5,14 +5,31 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import MainLayout from "@/components/layout/MainLayout";
 
-const Index = lazy(() => import("./pages/Index"));
+// Lazy load pages
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Angebote = lazy(() => import("./pages/Angebote"));
+const Plantafel = lazy(() => import("./pages/Plantafel"));
+const CommunicationHub = lazy(() => import("./pages/CommunicationHub"));
 const Login = lazy(() => import("./pages/Login"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
 
-// Protected Route wrapper
+// Loading component
+function PageLoader() {
+  return (
+    <div className="flex h-screen items-center justify-center text-muted-foreground">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+        <p>Wird geladen...</p>
+      </div>
+    </div>
+  );
+}
+
+// Protected Route wrapper with MainLayout
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
 
@@ -31,7 +48,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  return <>{children}</>;
+  return <MainLayout>{children}</MainLayout>;
 }
 
 // Public Route wrapper (redirects to home if already logged in)
@@ -58,14 +75,9 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex h-screen items-center justify-center text-muted-foreground">
-          Oberfläche wird geladen …
-        </div>
-      }
-    >
+    <Suspense fallback={<PageLoader />}>
       <Routes>
+        {/* Public Routes */}
         <Route
           path="/login"
           element={
@@ -74,15 +86,42 @@ function AppRoutes() {
             </PublicRoute>
           }
         />
+
+        {/* Protected Routes */}
         <Route
           path="/"
           element={
             <ProtectedRoute>
-              <Index />
+              <Dashboard />
             </ProtectedRoute>
           }
         />
-        {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+        <Route
+          path="/angebote"
+          element={
+            <ProtectedRoute>
+              <Angebote />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plantafel"
+          element={
+            <ProtectedRoute>
+              <Plantafel />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/kommunikation"
+          element={
+            <ProtectedRoute>
+              <CommunicationHub />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Catch-all */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>

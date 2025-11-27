@@ -18,6 +18,7 @@ import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
 import DatabaseManager from "@/components/DatabaseManager";
 import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
 import OfferEditor, { OfferPosition } from "@/components/OfferEditor";
+import OfferLibrary from "@/components/OfferLibrary";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
@@ -26,6 +27,7 @@ import type {
   RevenueGuardResponse,
   RevenueGuardSuggestion,
   WizardStepResponse,
+  Offer,
 } from "@/lib/api";
 
 // ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
@@ -52,8 +54,12 @@ type UiSection = {
 // ---- Eingabe-Historie (links) ----
 type InputEntry = { id: string; text: string; ts: number };
 
-const KalkulaiInterface = () => {
-  const { user, logout, changePassword, changeEmail, updateProfile } = useAuth();
+interface KalkulaiInterfaceProps {
+  embedded?: boolean;
+}
+
+const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
+  const { user, token, logout, changePassword, changeEmail, updateProfile } = useAuth();
   
   const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
@@ -85,6 +91,12 @@ const KalkulaiInterface = () => {
   const [emailPassword, setEmailPassword] = useState("");
   const [isChangingEmail, setIsChangingEmail] = useState(false);
   const [emailMessage, setEmailMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Current offer being edited (from library)
+  const [currentOffer, setCurrentOffer] = useState<Offer | null>(null);
+  const [offerTitle, setOfferTitle] = useState("");
+  const [offerKunde, setOfferKunde] = useState("");
+  const [isSavingOffer, setIsSavingOffer] = useState(false);
 
   // Angebotspositionen (final-relevant: PDF, Preise)
   const [positions, setPositions] = useState<
@@ -459,15 +471,20 @@ const KalkulaiInterface = () => {
       /* noop */
     }
 
-    const newPos =
-      mapped ??
-      ({
-        nr: positions.length + 1,
+    // Berechne die korrekte nächste Positionsnummer
+    const nextNr = positions.length > 0 
+      ? Math.max(...positions.map(p => p.nr)) + 1 
+      : 1;
+
+    const newPos = {
+      ...(mapped ?? {
         name: sug.name,
         menge: Number(sug.menge) || 0,
         einheit: sug.einheit || "",
         epreis: 0,
-      } as const);
+      }),
+      nr: nextNr,  // Immer die korrekte fortlaufende Nummer setzen
+    };
 
     setPositions((prev) => [...prev, newPos]);
     // Nach Hinzufügen direkt erneut prüfen
@@ -502,132 +519,323 @@ const KalkulaiInterface = () => {
     setIsEditing(false);
   };
 
+  // --- Bibliothek Funktionen ---
+  const handleEditOfferFromLibrary = (offer: Offer) => {
+    setCurrentOffer(offer);
+    setOfferTitle(offer.title);
+    setOfferKunde(offer.kunde || "");
+    setPositions(offer.positions);
+    setActiveNav("erstellen");
+    setSections([
+      mkSection({
+        title: "Angebot geladen",
+        subtitle: offer.title,
+        description: `Das Angebot wurde aus der Bibliothek geladen. Du kannst es jetzt bearbeiten oder über den Chat anpassen.`,
+        source: "system",
+      }),
+    ]);
+  };
+
+  const handleNewOffer = () => {
+    setCurrentOffer(null);
+    setOfferTitle("");
+    setOfferKunde("");
+    setPositions([]);
+    setSections([]);
+    setInputs([]);
+    setGuard(null);
+    setActiveNav("erstellen");
+  };
+
+  const handleSaveOffer = async () => {
+    if (!token || positions.length === 0) return;
+    
+    const title = offerTitle.trim() || `Angebot vom ${new Date().toLocaleDateString("de-DE")}`;
+    
+    setIsSavingOffer(true);
+    try {
+      if (currentOffer) {
+        // Update existing offer
+        const response = await api.offers.update(token, currentOffer.id, {
+          title,
+          kunde: offerKunde || undefined,
+          positions,
+        });
+        setCurrentOffer(response.offer);
+        setSections((prev) => [
+          ...prev,
+          mkSection({
+            title: "Angebot gespeichert",
+            subtitle: title,
+            description: "Änderungen wurden in der Bibliothek gespeichert.",
+            source: "system",
+          }),
+        ]);
+      } else {
+        // Create new offer
+        const response = await api.offers.create(token, {
+          title,
+          kunde: offerKunde || undefined,
+          positions,
+        });
+        setCurrentOffer(response.offer);
+        setSections((prev) => [
+          ...prev,
+          mkSection({
+            title: "Angebot gespeichert",
+            subtitle: title,
+            description: "Das Angebot wurde in der Bibliothek gespeichert.",
+            source: "system",
+          }),
+        ]);
+      }
+    } catch (err: any) {
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Fehler",
+          subtitle: "Speichern fehlgeschlagen",
+          description: err.message || "Unbekannter Fehler beim Speichern",
+          source: "system",
+        }),
+      ]);
+    } finally {
+      setIsSavingOffer(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
-        <div className="max-w-[1440px] mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <img
-                src="/lovable-uploads/c512bb54-21ad-4d03-a77e-daa5f6a25264.png"
-                alt="KalkulAI Logo"
-                className="h-16 w-auto"
-              />
-            </div>
-            <div className="flex items-center gap-8">
+    <div className={embedded ? "" : "min-h-screen bg-background"}>
+      {/* Embedded Header - kompakt für eingebetteten Modus */}
+      {embedded ? (
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Angebote & Rechnungen</h1>
+            <p className="text-slate-500 mt-1">Erstelle und verwalte deine Dokumente</p>
+          </div>
+          <div className="flex items-center gap-4">
+            {/* Navigation Tabs */}
+            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
               <button
                 onClick={() => setActiveNav("erstellen")}
-                className={`text-sm font-medium transition-colors ${
-                  activeNav === "erstellen" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeNav === "erstellen" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Erstellen
               </button>
               <button
                 onClick={() => setActiveNav("bibliothek")}
-                className={`text-sm font-medium transition-colors ${
-                  activeNav === "bibliothek" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeNav === "bibliothek" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Bibliothek
               </button>
-
-              {/* Chat <-> Wizard Umschalter */}
-              <div className="ml-6 flex items-center gap-2">
+            </div>
+            
+            {/* Mode Toggle (Chat/Wizard) */}
+            {activeNav === "erstellen" && (
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
                 <button
                   onClick={() => setLeftMode("chat")}
-                  className={`text-sm px-3 py-1 rounded-full ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     leftMode === "chat"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      ? "bg-primary text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
                   Chat
                 </button>
                 <button
                   onClick={() => setLeftMode("wizard")}
-                  className={`text-sm px-3 py-1 rounded-full ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     leftMode === "wizard"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      ? "bg-primary text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
                   Wizard
                 </button>
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                      <span className="text-sm font-semibold text-primary">
-                        {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <span className="hidden sm:inline max-w-[120px] truncate">
-                      {user?.name || user?.email || "Profil"}
-                    </span>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <div className="px-3 py-2 border-b border-border">
-                    <p className="text-sm font-medium truncate">{user?.name || "Benutzer"}</p>
-                    <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
-                  </div>
-                  <DropdownMenuItem
-                    onSelect={() => setIsProfileDialogOpen(true)}
-                    className="mt-1"
-                  >
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Mein Profil</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => setIsSettingsDialogOpen(true)}
-                  >
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Einstellungen</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={logout}
-                    className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                  >
-                    <LogOut className="mr-2 h-4 w-4" />
-                    <span>Abmelden</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
+            )}
 
-          {/* Tab Toggle */}
-          <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={() => setActiveTab("angebot")}
-              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
-                activeTab === "angebot" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
+            {/* Type Toggle (Angebot/Rechnung) */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+              <button
+                onClick={() => setActiveTab("angebot")}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "angebot" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Angebot
+              </button>
+              <button
+                onClick={() => setActiveTab("rechnung")}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "rechnung" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Rechnung
+              </button>
+            </div>
+
+            {/* Settings Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsSettingsDialogOpen(true)}
+              className="gap-2"
             >
-              Angebot
-            </button>
-            <button
-              onClick={() => setActiveTab("rechnung")}
-              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
-                activeTab === "rechnung" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
-            >
-              Rechnung
-            </button>
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Einstellungen</span>
+            </Button>
           </div>
         </div>
-      </header>
+      ) : (
+        /* Original Header für Standalone-Modus */
+        <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
+          <div className="max-w-[1440px] mx-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/lovable-uploads/c512bb54-21ad-4d03-a77e-daa5f6a25264.png"
+                  alt="KalkulAI Logo"
+                  className="h-16 w-auto"
+                />
+              </div>
+              <div className="flex items-center gap-8">
+                <button
+                  onClick={() => setActiveNav("erstellen")}
+                  className={`text-sm font-medium transition-colors ${
+                    activeNav === "erstellen" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Erstellen
+                </button>
+                <button
+                  onClick={() => setActiveNav("bibliothek")}
+                  className={`text-sm font-medium transition-colors ${
+                    activeNav === "bibliothek" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Bibliothek
+                </button>
+
+                {/* Chat <-> Wizard Umschalter */}
+                <div className="ml-6 flex items-center gap-2">
+                  <button
+                    onClick={() => setLeftMode("chat")}
+                    className={`text-sm px-3 py-1 rounded-full ${
+                      leftMode === "chat"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => setLeftMode("wizard")}
+                    className={`text-sm px-3 py-1 rounded-full ${
+                      leftMode === "wizard"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    Wizard
+                  </button>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <span className="text-sm font-semibold text-primary">
+                          {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <span className="hidden sm:inline max-w-[120px] truncate">
+                        {user?.name || user?.email || "Profil"}
+                      </span>
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <div className="px-3 py-2 border-b border-border">
+                      <p className="text-sm font-medium truncate">{user?.name || "Benutzer"}</p>
+                      <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                    </div>
+                    <DropdownMenuItem
+                      onSelect={() => setIsProfileDialogOpen(true)}
+                      className="mt-1"
+                    >
+                      <User className="mr-2 h-4 w-4" />
+                      <span>Mein Profil</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => setIsSettingsDialogOpen(true)}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      <span>Einstellungen</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={logout}
+                      className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                    >
+                      <LogOut className="mr-2 h-4 w-4" />
+                      <span>Abmelden</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            {/* Tab Toggle */}
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => setActiveTab("angebot")}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                  activeTab === "angebot" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                Angebot
+              </button>
+              <button
+                onClick={() => setActiveTab("rechnung")}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                  activeTab === "rechnung" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                Rechnung
+              </button>
+            </div>
+          </div>
+        </header>
+      )}
 
       {/* Main */}
-      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className={embedded ? "" : "max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6"}>
+        {activeNav === "bibliothek" ? (
+          /* Bibliothek View */
+          <Card className="p-6 lg:p-8 min-h-[70vh] shadow-soft border border-border">
+            <OfferLibrary 
+              onEditOffer={handleEditOfferFromLibrary}
+              onNewOffer={handleNewOffer}
+            />
+          </Card>
+        ) : (
+          /* Erstellen View */
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left */}
           <div className="space-y-4">
@@ -706,34 +914,34 @@ const KalkulaiInterface = () => {
                 />
               ) : (
                 <>
-                  {/* Kopf */}
-                  <div className="mb-4 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
-                      <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      disabled={isMakingPdf || positions.length === 0}
-                      onClick={handleMakePdf}
-                      title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
-                    >
-                      <FileText className="w-4 h-4 mr-2" />
-                      {isMakingPdf ? "PDF…" : "PDF erstellen"}
-                    </Button>
-                  </div>
+              {/* Kopf */}
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
+                  <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={isMakingPdf || positions.length === 0}
+                  onClick={handleMakePdf}
+                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                </Button>
+              </div>
 
-                  {/* Scrollbarer Content-Bereich */}
-                  <div className="flex-1 overflow-y-auto">
-                    {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
-                      <div className="flex items-center justify-center h-full">
-                        <div className="text-center">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-                          <p className="text-muted-foreground">Analysiere Eingabe…</p>
-                        </div>
-                      </div>
+              {/* Scrollbarer Content-Bereich */}
+              <div className="flex-1 overflow-y-auto">
+                {isLoading && !chatSection && supportingSections.length === 0 && (!guard || guard.missing.length === 0) ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                      <p className="text-muted-foreground">Analysiere Eingabe…</p>
+                    </div>
+                  </div>
                     ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) || positions.length > 0 ? (
-                      <div className="space-y-6">
+                  <div className="space-y-6">
                         {/* Positions Preview */}
                         {positions.length > 0 && (
                           <div className="mb-4 border border-border rounded-lg overflow-hidden">
@@ -764,100 +972,128 @@ const KalkulaiInterface = () => {
                           </div>
                         )}
 
-                        {/* Revenue Guard Block */}
-                        {guard && guard.missing.length > 0 && (
-                          <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
-                            <div className="flex items-center justify-between mb-2">
-                              <h3 className="font-semibold text-blue-900">Vergessene Posten (Wächter)</h3>
-                              <span className="text-xs text-blue-700">{guard.missing.length} Vorschlag/Vorschläge</span>
-                            </div>
-                            <ul className="space-y-2">
-                              {guard.missing.map((m) => (
-                                <li key={m.id} className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="font-medium">
-                                      {m.name}{" "}
-                                      <span className="text-xs text-muted-foreground">({m.category})</span>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                      {m.menge ?? "—"} {m.einheit ?? ""} &middot; {m.reason}
-                                    </div>
-                                  </div>
-                                  <Button size="sm" variant="outline" onClick={() => addSuggestion(m)}>
-                                    Übernehmen
-                                  </Button>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {chatSection && (
-                          <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
-                            <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
-                            {chatSection.subtitle && (
-                              <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
-                            )}
-                            {chatSection.description && (
-                              <div className="markdown-body text-foreground text-base leading-7">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {String(chatSection.description)}
-                                </ReactMarkdown>
+                    {/* Revenue Guard Block */}
+                    {guard && guard.missing.length > 0 && (
+                      <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="font-semibold text-blue-900">Vergessene Posten (Wächter)</h3>
+                          <span className="text-xs text-blue-700">{guard.missing.length} Vorschlag/Vorschläge</span>
+                        </div>
+                        <ul className="space-y-2">
+                          {guard.missing.map((m) => (
+                            <li key={m.id} className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-medium">
+                                  {m.name}{" "}
+                                  <span className="text-xs text-muted-foreground">({m.category})</span>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {m.menge ?? "—"} {m.einheit ?? ""} &middot; {m.reason}
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        )}
-
-                        {supportingSections.map((section) => (
-                          <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
-                            <div className="flex items-center justify-between mb-1">
-                              <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
-                              <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
-                            </div>
-                            {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
-                            {section.description && (
-                              <div className="markdown-body text-sm leading-6 text-foreground">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {String(section.description)}
-                                </ReactMarkdown>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-center h-full">
-                        <p className="text-base text-muted-foreground text-center">
-                          Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
-                        </p>
+                              <Button size="sm" variant="outline" onClick={() => addSuggestion(m)}>
+                                Übernehmen
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
-                  </div>
 
-                  {/* Footer (rechts) */}
-                  <div className="mt-4 pt-4 border-t border-border">
-                    <div className="flex gap-3 justify-center">
-                      <Button
-                        variant="outline"
-                        className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-primary/10 hover:border-primary' : 'bg-muted text-muted-foreground border-muted'}`}
-                        disabled={positions.length === 0}
-                        onClick={handleStartEditing}
-                        title={positions.length === 0 ? "Erst Positionen erstellen" : "Angebot bearbeiten"}
-                      >
-                        <Edit className="w-4 h-4 mr-2" />
-                        Bearbeiten
-                      </Button>
-                      <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
-                        <Save className="w-4 h-4 mr-2" />
-                        Speichern
-                      </Button>
-                    </div>
+                    {chatSection && (
+                      <div key={chatSection.id} className="rounded-xl border border-border bg-card/60 p-5 shadow-sm">
+                        <h3 className="text-lg font-semibold text-foreground mb-1">{chatSection.title}</h3>
+                        {chatSection.subtitle && (
+                          <p className="text-sm text-muted-foreground mb-3">{chatSection.subtitle}</p>
+                        )}
+                        {chatSection.description && (
+                          <div className="markdown-body text-foreground text-base leading-7">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {String(chatSection.description)}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {supportingSections.map((section) => (
+                      <div key={section.id} className="rounded-xl border border-dashed border-border/80 p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="text-sm font-semibold text-foreground">{section.title}</h3>
+                          <span className="text-xs uppercase text-muted-foreground">{section.source}</span>
+                        </div>
+                        {section.subtitle && <p className="text-xs text-muted-foreground mb-2">{section.subtitle}</p>}
+                        {section.description && (
+                          <div className="markdown-body text-sm leading-6 text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {String(section.description)}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-base text-muted-foreground text-center">
+                      Beschreiben Sie Ihr Bauprojekt im Chatfeld links oder nutzen Sie den Wizard, um das Angebot erstellen zu lassen.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer (rechts) */}
+              <div className="mt-4 pt-4 border-t border-border">
+                {/* Current offer info */}
+                {(currentOffer || positions.length > 0) && (
+                  <div className="mb-3 flex items-center gap-2">
+                    <Input
+                      placeholder="Angebotstitel (optional)"
+                      value={offerTitle}
+                      onChange={(e) => setOfferTitle(e.target.value)}
+                      className="flex-1 h-9 text-sm"
+                    />
+                    <Input
+                      placeholder="Kunde (optional)"
+                      value={offerKunde}
+                      onChange={(e) => setOfferKunde(e.target.value)}
+                      className="flex-1 h-9 text-sm"
+                    />
+                  </div>
+                )}
+                <div className="flex gap-3 justify-center">
+                  <Button
+                    variant="outline"
+                    className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-primary/10 hover:border-primary' : 'bg-muted text-muted-foreground border-muted'}`}
+                    disabled={positions.length === 0}
+                    onClick={handleStartEditing}
+                    title={positions.length === 0 ? "Erst Positionen erstellen" : "Angebot bearbeiten"}
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Bearbeiten
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-green-50 hover:border-green-500 hover:text-green-700' : 'bg-muted text-muted-foreground border-muted'}`}
+                    disabled={positions.length === 0 || isSavingOffer}
+                    onClick={handleSaveOffer}
+                    title={positions.length === 0 ? "Erst Positionen erstellen" : "In Bibliothek speichern"}
+                  >
+                    {isSavingOffer ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4 mr-2" />
+                    )}
+                    {currentOffer ? "Aktualisieren" : "Speichern"}
+                  </Button>
+                </div>
+              </div>
                 </>
               )}
             </Card>
           </div>
         </div>
+        )}
       </main>
 
       {/* Dialogs */}
@@ -904,7 +1140,7 @@ const KalkulaiInterface = () => {
                 </div>
               </div>
               
-              <div className="space-y-3">
+          <div className="space-y-3">
                 <div className="space-y-2">
                   <Label htmlFor="profile-name">Name</Label>
                   <Input
@@ -978,7 +1214,7 @@ const KalkulaiInterface = () => {
                     >
                       {showPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
-                  </div>
+          </div>
                 </div>
                 
                 <div className="space-y-2">
