@@ -159,42 +159,46 @@ else:
         PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
 
-from langchain.schema.retriever import BaseRetriever
-from langchain.schema import Document
-from langchain.callbacks.manager import CallbackManagerForRetrieverRun
-from typing import List
+# LangChain imports - optional for smoke tests without full dependencies
+try:
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.documents import Document as LCDocument
+    from langchain_core.callbacks import CallbackManagerForRetrieverRun
 
-class IndexManagerRetrieverWrapper(BaseRetriever):
-    """Wrapper to make index_manager compatible with LangChain retriever interface"""
-    company_id: str = "demo"
-    
-    class Config:
-        arbitrary_types_allowed = True
-    
-    def _get_relevant_documents(
-        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
-    ) -> List[Document]:
-        """Retrieve relevant documents from index_manager"""
-        # Ensure index exists
-        index = index_manager.ensure_index(self.company_id)
+    class IndexManagerRetrieverWrapper(BaseRetriever):
+        """Wrapper to make index_manager compatible with LangChain retriever interface"""
+        company_id: str = "demo"
         
-        # Search
-        results = index_manager.search(self.company_id, query, top_k=20)
+        class Config:
+            arbitrary_types_allowed = True
         
-        # Convert to LangChain Document format
-        docs = []
-        for result in results:
-            doc = Document(
-                page_content=result.get("text", ""),
-                metadata={
-                    "sku": result.get("sku", ""),
-                    "name": result.get("name", ""),
-                    "score": result.get("score", 0.0)
-                }
-            )
-            docs.append(doc)
-        
-        return docs
+        def _get_relevant_documents(
+            self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+        ) -> List[LCDocument]:
+            """Retrieve relevant documents from index_manager"""
+            # Ensure index exists
+            index = index_manager.ensure_index(self.company_id)
+            
+            # Search
+            results = index_manager.search(self.company_id, query, top_k=20)
+            
+            # Convert to LangChain Document format
+            docs = []
+            for result in results:
+                doc = LCDocument(
+                    page_content=result.get("text", ""),
+                    metadata={
+                        "sku": result.get("sku", ""),
+                        "name": result.get("name", ""),
+                        "score": result.get("score", 0.0)
+                    }
+                )
+                docs.append(doc)
+            
+            return docs
+
+except ImportError:  # pragma: no cover - smoke tests without langchain
+    IndexManagerRetrieverWrapper = None  # type: ignore[misc, assignment]
 
 if SKIP_LLM_SETUP and not FORCE_RETRIEVER_BUILD:
     DB = None
@@ -204,7 +208,10 @@ else:
     DB, _ = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
     
     # New index_manager system (for dynamic products)
-    RETRIEVER = IndexManagerRetrieverWrapper(company_id="demo")
+    if IndexManagerRetrieverWrapper is not None:
+        RETRIEVER = IndexManagerRetrieverWrapper(company_id="demo")
+    else:
+        RETRIEVER = None  # pragma: no cover
 
 def _sku_from_name(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
