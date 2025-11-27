@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover - optional dependency for smoke tests
     rtf_to_text = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional during smoke tests
-    from langchain.schema import Document  # type: ignore
+    from langchain_core.documents import Document  # type: ignore
 except ImportError:  # pragma: no cover - lightweight fallback for smoke tests
     @dataclass
     class Document:  # type: ignore[override]

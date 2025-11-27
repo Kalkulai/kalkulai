@@ -159,9 +159,9 @@ else:
         PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
 
-from langchain.schema.retriever import BaseRetriever
-from langchain.schema import Document
-from langchain.callbacks.manager import CallbackManagerForRetrieverRun
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.documents import Document
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from typing import List
 
 class IndexManagerRetrieverWrapper(BaseRetriever):

@@ -602,7 +602,7 @@ class _CompanyRetriever:
         self._manager = manager_module
 
     def get_relevant_documents(self, query: str):
-        from langchain.schema import Document as LCDocument  # type: ignore
+        from langchain_core.documents import Document as LCDocument  # type: ignore
 
         hits = self._manager.search_index(self.company_id, query, top_k=20)
         return [
