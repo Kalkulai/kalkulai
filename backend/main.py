@@ -45,6 +45,7 @@ from app import admin_api
 from app import auth_api
 from app import auth
 from app import offers_api
+from app import speech_api
 from app.services import quote_service as _quote_service_module
 from retriever.thin import search_catalog_thin as _thin_search_catalog
 from store import catalog_store
@@ -534,6 +535,7 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
 app.include_router(auth_api.router)
 app.include_router(offers_api.router)
+app.include_router(speech_api.router)
 
 # Root (Health)
 @app.get("/")

@@ -21,3 +21,6 @@ docarray>=0.40.0,<0.41
 # --- Vektor-DB / Embeddings / API ---
 # sentence-transformers>=3.0.1,<4.0  # Kommentiert: Nur für lokale Embeddings nötig
 openai>=1.35.10,<2.0
+
+# --- Speech Services (Azure) ---
+httpx>=0.27.0,<1.0  # Async HTTP client for Azure token fetching

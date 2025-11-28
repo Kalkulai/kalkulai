@@ -182,6 +182,18 @@ export type ResetResponse = {
   message?: string;
 };
 
+// Speech (Azure)
+export type SpeechTokenResponse = {
+  token: string;
+  region: string;
+  expires_in_seconds: number;
+};
+
+export type SpeechConfigResponse = {
+  region: string;
+  enabled: boolean;
+};
+
 // Admin
 export type AdminProduct = {
   company_id: string;
@@ -255,6 +267,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+
+  // --- Speech (Azure) ---
+  speechConfig: () => jsonFetch<SpeechConfigResponse>(`/api/speech/config`),
+  speechToken: () => jsonFetch<SpeechTokenResponse>(`/api/speech/token`),
 
   // Chat (LLM1)
   chat: (message: string) =>
