@@ -461,11 +461,16 @@ def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
     saved_path = tmp_path / "outputs" / "angebot.pdf"
     saved_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def fake_render(env, context, output_dir):  # pragma: no cover - patched
+    def fake_render(env, template_file, context, output_dir):  # pragma: no cover - patched
+        assert template_file.endswith(".html")
         saved_path.write_text("pdf")
         return saved_path
 
-    fake_module = SimpleNamespace(render_pdf_from_template=fake_render)
+    fake_module = SimpleNamespace(
+        render_pdf_from_template=fake_render,
+        DEFAULT_OFFER_TEMPLATE_ID="classic",
+        resolve_offer_template=lambda tpl_id: {"id": "classic", "file": "offer.html"},
+    )
     monkeypatch.setitem(sys.modules, "backend.app.pdf", fake_module)
     ctx = make_context(tmp_path)
     payload = {
@@ -477,6 +482,7 @@ def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
 
     assert result["pdf_url"].endswith("angebot.pdf")
     assert result["context"]["brutto_summe"] == 11.9  # 19 % VAT
+    assert result["template_id"] == "classic"
 
 
 def test_wizard_flow_produces_suggestions(tmp_path):

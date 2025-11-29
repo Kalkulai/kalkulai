@@ -75,8 +75,20 @@ export type PdfRequestPayload = {
   kunde?: string;
   angebot_nr?: string;
   datum?: string;
+  template_id?: string;
+  template?: string;
 };
-export type PdfResponse = { pdf_url: string; context: any };
+export type PdfResponse = { pdf_url: string; context: any; template_id?: string };
+
+export type OfferTemplateOption = {
+  id: string;
+  label: string;
+  tagline: string;
+  description: string;
+  accent: string;
+  background: string;
+  is_default?: boolean;
+};
 
 // Catalog
 export type CatalogSearchResult = {
@@ -270,6 +282,11 @@ export const api = {
     jsonFetch<PdfResponse>(`/api/pdf`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  pdfTemplates: () =>
+    jsonFetch<{ templates: OfferTemplateOption[] }>(`/api/pdf/templates`, {
+      method: "GET",
     }),
 
   // Catalog search (thin retrieval)

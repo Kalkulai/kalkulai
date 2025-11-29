@@ -3566,7 +3566,11 @@ def generate_offer_positions(
 
 
 def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceContext) -> Dict[str, Any]:
-    from app.pdf import render_pdf_from_template
+    from app.pdf import (
+        DEFAULT_OFFER_TEMPLATE_ID,
+        render_pdf_from_template,
+        resolve_offer_template,
+    )
 
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
@@ -3603,9 +3607,12 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
         "ust_satz_prozent": int(ctx.vat_rate * 100),
     }
 
-    pdf_path = render_pdf_from_template(ctx.env, context, ctx.output_dir)
+    template_id = payload.get("template_id") or payload.get("template") or DEFAULT_OFFER_TEMPLATE_ID
+    template_def = resolve_offer_template(str(template_id) if template_id is not None else None)
+
+    pdf_path = render_pdf_from_template(ctx.env, template_def["file"], context, ctx.output_dir)
     rel = Path(pdf_path).relative_to(ctx.output_dir)
-    return {"pdf_url": f"/outputs/{rel}", "context": context}
+    return {"pdf_url": f"/outputs/{rel}", "context": context, "template_id": template_def["id"]}
 
 
 def wizard_next_step(*, payload: Dict[str, Any], ctx: QuoteServiceContext) -> Dict[str, Any]:

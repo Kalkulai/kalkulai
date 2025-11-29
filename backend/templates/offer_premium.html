@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ angebot_nr }} – Premium-Angebot</title>
+    <style>
+        :root {
+            --background: #fdf8f3;
+            --paper: #ffffff;
+            --text: #1c1917;
+            --muted: #6b7280;
+            --accent: #b45309;
+            --accent-dark: #92400e;
+            --border: rgba(180, 83, 9, 0.2);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Playfair Display", "Georgia", serif;
+            background: var(--background);
+            color: var(--text);
+            font-size: 12.5px;
+        }
+
+        .frame {
+            margin: 12mm;
+            border: 2px solid var(--accent);
+            border-radius: 18px;
+            padding: 24px;
+            background: linear-gradient(120deg, #fff, #fff8f1);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 24px;
+        }
+
+        .brand {
+            max-width: 55%;
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 28px;
+            letter-spacing: 0.1em;
+        }
+
+        .brand h1 span {
+            color: var(--accent);
+        }
+
+        .brand p {
+            margin: 6px 0 0;
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+        }
+
+        .details {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-family: "Inter", Arial, sans-serif;
+            font-size: 11.5px;
+            min-width: 220px;
+        }
+
+        .details div {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            color: var(--muted);
+        }
+
+        .details strong {
+            color: var(--text);
+        }
+
+        h2 {
+            margin: 20px 0 8px;
+            font-size: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+        }
+
+        .quote {
+            border-left: 4px solid var(--accent);
+            padding-left: 14px;
+            font-style: italic;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .card {
+            background: var(--paper);
+            border: 1px solid rgba(12, 10, 9, 0.08);
+            border-radius: 14px;
+            padding: 18px 20px;
+            margin-bottom: 18px;
+            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 18px;
+            font-family: "Inter", Arial, sans-serif;
+        }
+
+        thead th {
+            font-size: 11px;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            padding: 10px;
+            border-bottom: 1.5px solid var(--accent);
+            color: var(--accent-dark);
+        }
+
+        tbody td {
+            padding: 12px 10px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .center { text-align: center; }
+        .right { text-align: right; }
+
+        .totals {
+            background: var(--accent);
+            color: #fff;
+            border-radius: 14px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .totals div {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+        }
+
+        .totals div:last-child {
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            margin-top: 24px;
+            font-family: "Inter", Arial, sans-serif;
+        }
+
+        .info-box {
+            border: 1px solid rgba(12, 10, 9, 0.08);
+            border-radius: 12px;
+            padding: 14px 16px;
+            background: #fff;
+        }
+
+        .info-box h4 {
+            margin: 0 0 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        footer {
+            margin-top: 30px;
+            padding-top: 18px;
+            border-top: 1px solid rgba(0, 0, 0, 0.12);
+            font-size: 11px;
+            display: flex;
+            justify-content: space-between;
+            font-family: "Inter", Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+<div class="frame">
+    <header>
+        <div class="brand">
+            <h1><span>Kalkul</span>AI</h1>
+            <p>maßgeschneiderte angebote</p>
+        </div>
+        <div class="details">
+            <div><span>Datum</span><strong>{{ datum | date_format }}</strong></div>
+            <div><span>Angebot</span><strong>{{ angebot_nr }}</strong></div>
+            <div><span>Kundennr.</span><strong>K-20250601</strong></div>
+            <div><span>Kontakt</span><strong>Lisa Schneider</strong></div>
+        </div>
+    </header>
+
+    <div class="card">
+        {{ kunde }}
+    </div>
+
+    <h2>Angebotsübersicht</h2>
+    <div class="quote">
+        Mit größter Sorgfalt kalkuliert – unser Team liefert aus einer Hand Material,
+        Ausführung und Koordination. Die folgenden Positionen bilden den Leistungsumfang ab.
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th class="center">Pos.</th>
+            <th>Leistungsbeschreibung</th>
+            <th class="center">Menge</th>
+            <th class="center">Einheit</th>
+            <th class="right">Einzelpreis</th>
+            <th class="right">Gesamt</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for position in positionen %}
+        <tr>
+            <td class="center">{{ position.nr }}</td>
+            <td>{{ position.name }}</td>
+            <td class="center">{{ position.menge }}</td>
+            <td class="center">{{ position.einheit }}</td>
+            <td class="right">{{ position.epreis | currency }} €</td>
+            <td class="right">{{ position.gesamtpreis | currency }} €</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td class="center" colspan="6">Keine Positionen vorhanden</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="totals">
+        <div><span>Zwischensumme</span><span>{{ netto_summe | currency }} €</span></div>
+        <div><span>zzgl. {{ ust_satz_prozent }} % USt</span><span>{{ ust_betrag | currency }} €</span></div>
+        <div><span>Gesamtbetrag</span><span>{{ brutto_summe | currency }} €</span></div>
+    </div>
+
+    <div class="info-grid">
+        <div class="info-box">
+            <h4>Lieferweg</h4>
+            <div>Lieferung frei Bordsteinkante durch Spedition</div>
+        </div>
+        <div class="info-box">
+            <h4>Liefertermin</h4>
+            <div>ca. 2–3 Wochen nach Auftragsbestätigung</div>
+        </div>
+        <div class="info-box">
+            <h4>Konditionen</h4>
+            <div>Zahlung innerhalb 14 Tagen netto, Eigentumsvorbehalt bis zur vollständigen Begleichung.</div>
+        </div>
+    </div>
+
+    <div style="margin-top: 26px; line-height: 1.6;">
+        Mit verbindlichen Grüßen<br>
+        Max Mustermann
+    </div>
+
+    <footer>
+        <div>Max Mustermann GmbH · Geschäftsführer: Max Mustermann</div>
+        <div>Bank: Sparkasse Passau · IBAN: DE13 9583 9058 3920 552</div>
+        <div>max@example.com · www.example.com</div>
+    </footer>
+</div>
+</body>
+</html>
+
