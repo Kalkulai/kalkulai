@@ -26,6 +26,7 @@ if str(BASE_DIR) not in sys.path:
 
 # Lokale Module
 from app.db import load_products_file, build_vector_db
+from app.pdf import list_offer_templates
 from app.services.quote_service import (
     QuoteServiceContext,
     ServiceError,
@@ -598,6 +599,10 @@ def api_pdf(payload: Dict[str, Any] = Body(...)):
         return render_offer_or_invoice_pdf(payload=payload, ctx=_get_service_context())
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+@app.get("/api/pdf/templates")
+def api_pdf_templates():
+    return {"templates": list_offer_templates()}
 
 @app.get("/api/catalog")
 def api_catalog(limit: int = 50):

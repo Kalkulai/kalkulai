@@ -148,16 +148,17 @@ export default function OfferEditor({ positions: initialPositions, onSave, onCan
                     onChange={(e) => updatePosition(idx, "menge", e.target.value)}
                     className="h-9 text-sm"
                     min={0}
-                    step="0.01"
+                    step="0.5"
                   />
                 </div>
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">Einheit</label>
                   <Input
                     value={pos.einheit}
-                    onChange={(e) => updatePosition(idx, "einheit", e.target.value)}
                     placeholder="Stk"
-                    className="h-9 text-sm"
+                    className="h-9 text-sm bg-muted cursor-not-allowed"
+                    readOnly
+                    tabIndex={-1}
                   />
                 </div>
                 <div>

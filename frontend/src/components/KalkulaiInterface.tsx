@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,6 +28,7 @@ import type {
   RevenueGuardSuggestion,
   WizardStepResponse,
   Offer,
+  OfferTemplateOption,
 } from "@/lib/api";
 
 // ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
@@ -58,6 +59,35 @@ interface KalkulaiInterfaceProps {
   embedded?: boolean;
 }
 
+const coerceNumber = (value: number | string | null | undefined): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const normalizePositions = (items: OfferPosition[]): OfferPosition[] =>
+  items.map((p, idx) => {
+    const nr = Number.isFinite(p.nr) ? p.nr : idx + 1;
+    const menge = coerceNumber(p.menge);
+    const epreis = coerceNumber(p.epreis);
+    const gesamtpreis =
+      typeof p.gesamtpreis === "number" && Number.isFinite(p.gesamtpreis)
+        ? Math.round(p.gesamtpreis * 100) / 100
+        : Math.round(menge * epreis * 100) / 100;
+    return {
+      ...p,
+      nr,
+      menge,
+      epreis,
+      gesamtpreis,
+    };
+  });
+
 const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   const { user, token, logout, changePassword, changeEmail, updateProfile } = useAuth();
   
@@ -72,6 +102,33 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isMakingPdf, setIsMakingPdf] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [offerTemplates, setOfferTemplates] = useState<OfferTemplateOption[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const templateStorageKey = useMemo(
+    () => (user?.id ? `kalkulai_offer_template_${user.id}` : "kalkulai_offer_template_guest"),
+    [user?.id],
+  );
+  const handleTemplateSelect = useCallback(
+    (templateId: string) => {
+      setSelectedTemplateId(templateId);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(templateStorageKey, templateId);
+      }
+    },
+    [templateStorageKey],
+  );
+  const activeTemplate = useMemo(() => {
+    if (!offerTemplates.length) {
+      return selectedTemplateId ? { id: selectedTemplateId, label: selectedTemplateId, tagline: "", description: "", accent: "#0f172a", background: "#f4f4f5" } : null;
+    }
+    if (selectedTemplateId) {
+      return offerTemplates.find((tpl) => tpl.id === selectedTemplateId) ?? null;
+    }
+    return offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0] ?? null;
+  }, [offerTemplates, selectedTemplateId]);
   
   // Profile/Account state
   const [profileName, setProfileName] = useState(user?.name || "");
@@ -145,34 +202,126 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [inputText]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedTemplate = window.localStorage.getItem(templateStorageKey);
+    if (storedTemplate) {
+      setSelectedTemplateId(storedTemplate);
+    }
+  }, [templateStorageKey]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingTemplates(true);
+    api
+      .pdfTemplates()
+      .then((res) => {
+        if (!isMounted) return;
+        setOfferTemplates(res.templates || []);
+        setTemplateError(null);
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setTemplateError(err?.message || "Layouts konnten nicht geladen werden.");
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingTemplates(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!offerTemplates.length) return;
+    if (selectedTemplateId) {
+      const exists = offerTemplates.some((tpl) => tpl.id === selectedTemplateId);
+      if (!exists) {
+        const fallback = offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0];
+        if (fallback) {
+          handleTemplateSelect(fallback.id);
+        }
+      }
+      return;
+    }
+    const fallback = offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0];
+    if (fallback) {
+      handleTemplateSelect(fallback.id);
+    }
+  }, [offerTemplates, selectedTemplateId, handleTemplateSelect]);
+
+  type ResetOptions = {
+    keepOffer?: boolean;
+  };
+
+  const resetUiState = useCallback((options?: ResetOptions) => {
+    setPositions([]);
+    setSections([]);
+    setInputs([]);
+    setInputText("");
+    setGuard(null);
+    setWizardCtx(null);
+    setIsEditing(false);
+    setLeftMode("chat");
+
+    if (!options?.keepOffer) {
+      setCurrentOffer(null);
+      setOfferTitle("");
+      setOfferKunde("");
+    }
+  }, []);
+
   // ---- Backend-Reset beim Mount + lokaler Reset ----
   useEffect(() => {
     (async () => {
+      let errorMessage: string | null = null;
       try {
         await api.reset(); // leert Chat-Memory & Wizard-Sessions im Backend
-      } catch (e) {
-        // optional: System-Hinweis rechts anzeigen
-        setSections((prev) => [
-          ...prev,
-          {
-            id: String(Date.now() + Math.random()),
-            ts: Date.now(),
-            title: "Hinweis",
-            subtitle: "Server-Reset",
-            description: "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.",
-            source: "system",
-          },
-        ]);
+      } catch (e: any) {
+        errorMessage = String(e?.message ?? "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.");
       } finally {
-        // lokalen Zustand auch leeren
-        setPositions([]);
-        setSections([]);
-        setGuard(null);
-        setInputs([]);
-        setInputText("");
+        resetUiState();
+        if (errorMessage) {
+          setSections([
+            mkSection({
+              title: "Hinweis",
+              subtitle: "Server-Reset",
+              description: errorMessage,
+              source: "system",
+            }),
+          ]);
+        }
       }
     })();
-  }, []);
+  }, [resetUiState]);
+
+  const handleResetWorkspace = async () => {
+    if (isResetting) return;
+    setIsResetting(true);
+
+    let errorMessage: string | null = null;
+    try {
+      await api.reset();
+    } catch (error: any) {
+      errorMessage = String(error?.message ?? "Unbekannter Fehler beim Reset");
+    } finally {
+      resetUiState();
+      setIsResetting(false);
+
+      setSections([
+        mkSection({
+          title: errorMessage ? "Hinweis" : "Neu gestartet",
+          subtitle: errorMessage ? "Server-Reset fehlgeschlagen" : "Bereit für neue Eingaben",
+          description: errorMessage
+            ? `${errorMessage}. Bitte Seite neu laden oder später erneut probieren.`
+            : "Alle Eingaben wurden zurückgesetzt. Du kannst jetzt von vorne beginnen.",
+          source: "system",
+        }),
+      ]);
+    }
+  };
 
   useEffect(() => {
     if (isSettingsDialogOpen) {
@@ -226,7 +375,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
         try {
           const offer = await api.offerFromChat();
           if (offer?.positions?.length) {
-            setPositions(offer.positions);
+            setPositions(normalizePositions(offer.positions));
             setSections((prev) => [
               ...prev,
               mkSection({
@@ -301,6 +450,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
       const res = await api.pdf({
         positions,
         kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
+        template_id: selectedTemplateId ?? undefined,
       });
 
       const base = api.base();
@@ -420,7 +570,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
       ]);
     }
 
-    setPositions(mappedPositions);
+    setPositions(normalizePositions(mappedPositions));
 
     setSections((prev) => {
       const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
@@ -486,7 +636,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
       nr: nextNr,  // Immer die korrekte fortlaufende Nummer setzen
     };
 
-    setPositions((prev) => [...prev, newPos]);
+    setPositions((prev) => normalizePositions([...prev, newPos]));
     // Nach Hinzufügen direkt erneut prüfen
     await runRevenueGuard();
   }
@@ -502,7 +652,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   };
 
   const handleSaveEdits = (updatedPositions: OfferPosition[]) => {
-    setPositions(updatedPositions);
+    setPositions(normalizePositions(updatedPositions));
     setIsEditing(false);
     setSections((prev) => [
       ...prev,
@@ -524,7 +674,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
     setCurrentOffer(offer);
     setOfferTitle(offer.title);
     setOfferKunde(offer.kunde || "");
-    setPositions(offer.positions);
+    setPositions(normalizePositions(offer.positions));
     setActiveNav("erstellen");
     setSections([
       mkSection({
@@ -537,13 +687,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   };
 
   const handleNewOffer = () => {
-    setCurrentOffer(null);
-    setOfferTitle("");
-    setOfferKunde("");
-    setPositions([]);
-    setSections([]);
-    setInputs([]);
-    setGuard(null);
+    resetUiState();
     setActiveNav("erstellen");
   };
 
@@ -688,16 +832,6 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
               </button>
             </div>
 
-            {/* Settings Button */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsSettingsDialogOpen(true)}
-              className="gap-2"
-            >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Einstellungen</span>
-            </Button>
           </div>
         </div>
       ) : (
@@ -781,12 +915,6 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                     >
                       <User className="mr-2 h-4 w-4" />
                       <span>Mein Profil</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => setIsSettingsDialogOpen(true)}
-                    >
-                      <Settings className="mr-2 h-4 w-4" />
-                      <span>Einstellungen</span>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -875,7 +1003,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                       className="w-full min-h-[44px] resize-none border-none outline-none text-base leading-6 placeholder:text-muted-foreground bg-transparent p-0"
                       rows={1}
                     />
-                    <div className="flex items-center justify-between pt-2">
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
                       <div className="flex items-center gap-1.5">
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <MessageSquare className="w-4 h-4" />
@@ -887,10 +1015,26 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                           <Camera className="w-4 h-4" />
                         </Button>
                       </div>
-                      <Button onClick={handleSend} disabled={isLoading || !inputText.trim()} className="h-9 px-3 rounded-full">
-                        <ArrowUp className="w-4 h-4 mr-1" />
-                        Senden
-                      </Button>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="px-3 text-sm text-muted-foreground hover:text-foreground"
+                          onClick={handleResetWorkspace}
+                          disabled={isResetting}
+                        >
+                          {isResetting ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <RotateCcw className="w-4 h-4 mr-2" />
+                          )}
+                          Neu anfangen
+                        </Button>
+                        <Button onClick={handleSend} disabled={isLoading || !inputText.trim()} className="h-9 px-3 rounded-full">
+                          <ArrowUp className="w-4 h-4 mr-1" />
+                          Senden
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </>
@@ -915,20 +1059,26 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
               ) : (
                 <>
               {/* Kopf */}
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
                   <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
                 </div>
-                <Button
-                  variant="outline"
-                  disabled={isMakingPdf || positions.length === 0}
-                  onClick={handleMakePdf}
-                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
-                </Button>
+                <div className="text-right">
+                  <Button
+                    variant="outline"
+                    disabled={isMakingPdf || positions.length === 0}
+                    onClick={handleMakePdf}
+                    title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                  </Button>
+                  <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                    <Palette className="h-3.5 w-3.5" />
+                    <span>{activeTemplate ? `${activeTemplate.label} Layout` : "Standard Layout"}</span>
+                  </div>
+                </div>
               </div>
 
               {/* Scrollbarer Content-Bereich */}
@@ -1401,8 +1551,9 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
             </DialogDescription>
           </DialogHeader>
           <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="overview">Übersicht</TabsTrigger>
+              <TabsTrigger value="designs">Layouts</TabsTrigger>
               <TabsTrigger value="database">Datenbank</TabsTrigger>
               <TabsTrigger value="guard">Vergessener Wächter</TabsTrigger>
             </TabsList>
@@ -1416,6 +1567,77 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                   <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
                 </div>
               ))}
+            </TabsContent>
+            <TabsContent value="designs" className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">PDF-Grundgerüste</h3>
+                  <p className="text-sm text-muted-foreground">Wähle das Layout, das am besten zu deiner Außendarstellung passt.</p>
+                </div>
+                {activeTemplate && (
+                  <span className="text-xs text-muted-foreground">
+                    Aktiv:&nbsp;
+                    <span className="font-semibold text-foreground">{activeTemplate.label}</span>
+                  </span>
+                )}
+              </div>
+              {templateError && (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+                  {templateError}
+                </div>
+              )}
+              {isLoadingTemplates ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Layouts werden geladen …
+                </div>
+              ) : offerTemplates.length === 0 ? (
+                <div className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                  Noch keine Layouts verfügbar.
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {offerTemplates.map((tpl) => {
+                    const isActiveTemplate = tpl.id === selectedTemplateId || (!selectedTemplateId && tpl.is_default);
+                    return (
+                      <button
+                        type="button"
+                        key={tpl.id}
+                        onClick={() => handleTemplateSelect(tpl.id)}
+                        className={`rounded-2xl border px-5 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                          isActiveTemplate
+                            ? "border-primary bg-primary/5 ring-primary/40"
+                            : "border-border hover:border-primary/40 hover:bg-muted/40"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                              <Palette className="h-4 w-4 text-muted-foreground" />
+                              {tpl.label}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">{tpl.tagline}</p>
+                          </div>
+                          {isActiveTemplate && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                              <Check className="h-3 w-3" />
+                              Aktiv
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="mt-3 h-20 rounded-xl border transition"
+                          style={{
+                            borderColor: tpl.accent,
+                            background: `linear-gradient(135deg, ${tpl.background} 0%, #ffffff 100%)`,
+                          }}
+                        />
+                        <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{tpl.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </TabsContent>
             <TabsContent value="database" className="mt-4">
               <DatabaseManager />
