@@ -20,6 +20,13 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 
+# Load .env EARLY (before any local imports that might read env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
 # Add backend dir to path so we can import with 'app.' prefix
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -59,12 +66,6 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 # ---------- Pfade & ENV ----------
-try:  # bevorzugt lokale .env lesen, auch wenn uvicorn sie nicht lädt
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
-except Exception:
-    pass
-
 DATA_ROOT  = Path(os.getenv("DATA_ROOT", str(BASE_DIR)))
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
