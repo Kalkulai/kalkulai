@@ -244,3 +244,27 @@ def verify_token(current_user: dict = Depends(get_current_user)):
         }
     }
 
+
+class OfferLayoutRequest(BaseModel):
+    layout: Dict[str, Any]
+
+
+@router.get("/layout/offer")
+def get_offer_layout(current_user: dict = Depends(get_current_user)):
+    """Return stored offer layout configuration for the current user."""
+    layout = auth.get_user_layout(current_user["id"], kind="offer") or {}
+    return {"layout": layout}
+
+
+@router.put("/layout/offer")
+def save_offer_layout(
+    request: OfferLayoutRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Persist offer layout configuration for the current user."""
+    # keep the payload flexible; basic size guard to avoid abuse
+    if len(json.dumps(request.layout, ensure_ascii=False)) > 50_000:
+        raise HTTPException(status_code=400, detail="Layout ist zu groß")
+    auth.save_user_layout(current_user["id"], request.layout, kind="offer")
+    return {"success": True}
+

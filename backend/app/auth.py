@@ -62,12 +62,64 @@ def init_auth_tables() -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_layouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'offer',
+                layout_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_layouts_user_kind
+            ON user_layouts(user_id, kind)
+        """)
         conn.commit()
         
         # Create default admin user if no users exist
         cursor = conn.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
             _create_default_user(conn)
+    finally:
+        conn.close()
+
+
+def get_user_layout(user_id: int, kind: str = "offer") -> Optional[Dict[str, Any]]:
+    """Get stored layout configuration for a user."""
+    conn = _get_db()
+    try:
+        cursor = conn.execute(
+            "SELECT layout_json FROM user_layouts WHERE user_id = ? AND kind = ?",
+            (user_id, kind),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["layout_json"])
+        except Exception:
+            return None
+    finally:
+        conn.close()
+
+
+def save_user_layout(user_id: int, layout: Dict[str, Any], kind: str = "offer") -> None:
+    """Upsert layout configuration for a user."""
+    conn = _get_db()
+    try:
+        payload = json.dumps(layout, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO user_layouts (user_id, kind, layout_json, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, kind)
+            DO UPDATE SET layout_json = excluded.layout_json, updated_at = excluded.updated_at
+            """,
+            (user_id, kind, payload),
+        )
+        conn.commit()
     finally:
         conn.close()
 

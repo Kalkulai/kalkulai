@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
+import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,6 +29,7 @@ import type {
   WizardStepResponse,
   Offer,
   OfferTemplateOption,
+  OfferLayoutConfig,
 } from "@/lib/api";
 
 // ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
@@ -73,7 +74,8 @@ const coerceNumber = (value: number | string | null | undefined): number => {
 const normalizePositions = (items: OfferPosition[]): OfferPosition[] =>
   items.map((p, idx) => {
     const nr = Number.isFinite(p.nr) ? p.nr : idx + 1;
-    const menge = coerceNumber(p.menge);
+    const rawMenge = coerceNumber(p.menge);
+    const menge = rawMenge > 0 ? Math.ceil(rawMenge) : 0;
     const epreis = coerceNumber(p.epreis);
     const gesamtpreis =
       typeof p.gesamtpreis === "number" && Number.isFinite(p.gesamtpreis)
@@ -107,6 +109,10 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
+  const [layoutConfig, setLayoutConfig] = useState<OfferLayoutConfig | null>(null);
+  const [isLoadingLayout, setIsLoadingLayout] = useState(false);
+  const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const [layoutMessage, setLayoutMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const templateStorageKey = useMemo(
     () => (user?.id ? `kalkulai_offer_template_${user.id}` : "kalkulai_offer_template_guest"),
     [user?.id],
@@ -129,6 +135,21 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
     }
     return offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0] ?? null;
   }, [offerTemplates, selectedTemplateId]);
+
+  const effectiveLayout: OfferLayoutConfig = useMemo(
+    () => ({
+      primaryColor: "#0f172a",
+      accentColor: "#4f46e5",
+      backgroundColor: "#f9fafb",
+      metaBackground: "#f3f4f6",
+      clientBackground: "#eff6ff",
+      summaryBackground: "#f9fafb",
+      companyName: user?.name || "Max Mustermann GmbH",
+      offerTitle: "Projektangebot",
+      ...((layoutConfig || {}) as OfferLayoutConfig),
+    }),
+    [layoutConfig, user?.name],
+  );
   
   // Profile/Account state
   const [profileName, setProfileName] = useState(user?.name || "");
@@ -209,6 +230,30 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
       setSelectedTemplateId(storedTemplate);
     }
   }, [templateStorageKey]);
+
+  useEffect(() => {
+    if (!token) return;
+    let isMounted = true;
+    setIsLoadingLayout(true);
+    api.user
+      .getOfferLayout(token)
+      .then((res) => {
+        if (!isMounted) return;
+        setLayoutConfig(res.layout || {});
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setLayoutConfig({});
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingLayout(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [token]);
 
   useEffect(() => {
     let isMounted = true;
@@ -451,6 +496,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
         positions,
         kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
         template_id: selectedTemplateId ?? undefined,
+        ...(selectedTemplateId === "custom" ? { layout: effectiveLayout } : {}),
       });
 
       const base = api.base();
@@ -498,7 +544,8 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
 
     const previewMd = suggs
       .map((p) => {
-        const qty = typeof p.menge === "number" && !Number.isNaN(p.menge) ? p.menge : 0;
+        const rawQty = typeof p.menge === "number" && !Number.isNaN(p.menge) ? p.menge : 0;
+        const qty = rawQty > 0 ? Math.ceil(rawQty) : 0;
         const unit = p.einheit ?? "";
         const extra = p.text ? `\n  - ${p.text}` : "";
         return `- **${p.name}** – ${qty} ${unit}${extra}`;
@@ -522,7 +569,11 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   // ---------- Wizard: Finalize ----------
   const handleWizardFinalize = async (wz: WizardFinalizeResult) => {
     const matLines = wz.positions
-      .map((p) => `- name=${p.name}, menge=${Number(p.menge)}, einheit=${p.einheit}`)
+      .map((p) => {
+        const rawQty = Number(p.menge) || 0;
+        const qty = rawQty > 0 ? Math.ceil(rawQty) : 0;
+        return `- name=${p.name}, menge=${qty}, einheit=${p.einheit}`;
+      })
       .join("\n");
 
     const syntheticMessage =
@@ -551,13 +602,17 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
     }
 
     if (!mappedPositions.length) {
-      mappedPositions = wz.positions.map((p) => ({
-        nr: p.nr,
-        name: p.name,
-        menge: Number(p.menge) || 0,
-        einheit: p.einheit,
-        epreis: 0,
-      }));
+      mappedPositions = wz.positions.map((p) => {
+        const rawQty = Number(p.menge) || 0;
+        const menge = rawQty > 0 ? Math.ceil(rawQty) : 0;
+        return {
+          nr: p.nr,
+          name: p.name,
+          menge,
+          einheit: p.einheit,
+          epreis: 0,
+        };
+      });
       setSections((prev) => [
         ...prev,
         mkSection({
@@ -626,14 +681,18 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
       ? Math.max(...positions.map(p => p.nr)) + 1 
       : 1;
 
+    const rawSugQty = Number(sug.menge) || 0;
+    const sugMenge = rawSugQty > 0 ? Math.ceil(rawSugQty) : 0;
+
     const newPos = {
       ...(mapped ?? {
         name: sug.name,
-        menge: Number(sug.menge) || 0,
+        menge: sugMenge,
         einheit: sug.einheit || "",
         epreis: 0,
       }),
-      nr: nextNr,  // Immer die korrekte fortlaufende Nummer setzen
+      // Immer die korrekte fortlaufende Nummer setzen
+      nr: nextNr,
     };
 
     setPositions((prev) => normalizePositions([...prev, newPos]));
@@ -832,6 +891,16 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
               </button>
             </div>
 
+            {/* Settings Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsSettingsDialogOpen(true)}
+              className="gap-2"
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Einstellungen</span>
+            </Button>
           </div>
         </div>
       ) : (
@@ -915,6 +984,12 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                     >
                       <User className="mr-2 h-4 w-4" />
                       <span>Mein Profil</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => setIsSettingsDialogOpen(true)}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      <span>Einstellungen</span>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -1568,11 +1643,13 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                 </div>
               ))}
             </TabsContent>
-            <TabsContent value="designs" className="mt-4 space-y-4">
+            <TabsContent value="designs" className="mt-4 space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">PDF-Grundgerüste</h3>
-                  <p className="text-sm text-muted-foreground">Wähle das Layout, das am besten zu deiner Außendarstellung passt.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Wähle das Layout, das am besten zu deiner Außendarstellung passt – oder erstelle dein eigenes.
+                  </p>
                 </div>
                 {activeTemplate && (
                   <span className="text-xs text-muted-foreground">
@@ -1638,6 +1715,226 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                   })}
                 </div>
               )}
+
+              <div className="mt-4 rounded-2xl border border-border bg-muted/30 p-4 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">Eigenes Layout (Visueller Builder)</h3>
+                    <p className="text-xs text-muted-foreground max-w-xl">
+                      Passe Farben, Überschriften und Fußzeile an. Dein Layout wird verwendet, wenn du oben das Design
+                      <span className="font-semibold"> „Eigenes Layout“</span> auswählst.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={selectedTemplateId === "custom" ? "default" : "outline"}
+                    onClick={() => handleTemplateSelect("custom")}
+                  >
+                    <Palette className="mr-2 h-4 w-4" />
+                    Eigenes Layout aktivieren
+                  </Button>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Farben</p>
+                    <div className="space-y-2 rounded-xl border bg-background px-3 py-2">
+                      <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        Primär
+                        <input
+                          type="color"
+                          className="h-6 w-10 rounded border border-border bg-transparent"
+                          value={effectiveLayout.primaryColor || "#0f172a"}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), primaryColor: e.target.value }))
+                          }
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        Akzent
+                        <input
+                          type="color"
+                          className="h-6 w-10 rounded border border-border bg-transparent"
+                          value={effectiveLayout.accentColor || "#4f46e5"}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), accentColor: e.target.value }))
+                          }
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        Hintergrund
+                        <input
+                          type="color"
+                          className="h-6 w-10 rounded border border-border bg-transparent"
+                          value={effectiveLayout.backgroundColor || "#f9fafb"}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), backgroundColor: e.target.value }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Kopfbereich</p>
+                    <div className="space-y-2 rounded-xl border bg-background px-3 py-2">
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Firmenname</span>
+                        <Input
+                          value={effectiveLayout.companyName || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), companyName: e.target.value }))
+                          }
+                          placeholder="Max Mustermann GmbH"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Tagline</span>
+                        <Input
+                          value={effectiveLayout.companyTagline || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), companyTagline: e.target.value }))
+                          }
+                          placeholder="z. B. „Malerarbeiten mit System“"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Angebotstitel</span>
+                        <Input
+                          value={effectiveLayout.offerTitle || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), offerTitle: e.target.value }))
+                          }
+                          placeholder="Projektangebot"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fußzeile</p>
+                    <div className="space-y-2 rounded-xl border bg-background px-3 py-2">
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Links</span>
+                        <Input
+                          value={effectiveLayout.footerLeft || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), footerLeft: e.target.value }))
+                          }
+                          placeholder="Geschäftsführer …"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Mitte</span>
+                        <Input
+                          value={effectiveLayout.footerCenter || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), footerCenter: e.target.value }))
+                          }
+                          placeholder="Bank / IBAN …"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-xs text-muted-foreground">Rechts</span>
+                        <Input
+                          value={effectiveLayout.footerRight || ""}
+                          onChange={(e) =>
+                            setLayoutConfig((prev) => ({ ...(prev || {}), footerRight: e.target.value }))
+                          }
+                          placeholder="E-Mail / Web …"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Textbausteine</p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Einleitung</span>
+                      <textarea
+                        className="w-full min-h-[80px] rounded-md border bg-background px-2 py-1 text-xs"
+                        value={effectiveLayout.introText || ""}
+                        onChange={(e) =>
+                          setLayoutConfig((prev) => ({ ...(prev || {}), introText: e.target.value }))
+                        }
+                        placeholder="z. B. Dank für die Anfrage …"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Schlussformel</span>
+                      <textarea
+                        className="w-full min-h-[80px] rounded-md border bg-background px-2 py-1 text-xs"
+                        value={effectiveLayout.closingText || ""}
+                        onChange={(e) =>
+                          setLayoutConfig((prev) => ({ ...(prev || {}), closingText: e.target.value }))
+                        }
+                        placeholder="z. B. „Mit freundlichen Grüßen …“"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-border/60">
+                  <div className="space-y-1">
+                    {layoutMessage && (
+                      <p
+                        className={`text-xs ${
+                          layoutMessage.type === "success" ? "text-emerald-600" : "text-destructive"
+                        }`}
+                      >
+                        {layoutMessage.text}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Dein Layout wird pro Benutzerkonto gespeichert und steht auf allen Geräten zur Verfügung.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isSavingLayout || !token}
+                      onClick={() => {
+                        setLayoutConfig(null);
+                        setLayoutMessage(null);
+                      }}
+                    >
+                      Zurücksetzen
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={isSavingLayout || !token}
+                      onClick={async () => {
+                        if (!token) return;
+                        setLayoutMessage(null);
+                        setIsSavingLayout(true);
+                        try {
+                          await api.user.saveOfferLayout(token, effectiveLayout);
+                          setLayoutMessage({ type: "success", text: "Eigenes Layout gespeichert." });
+                        } catch (err: any) {
+                          setLayoutMessage({
+                            type: "error",
+                            text: err?.message || "Layout konnte nicht gespeichert werden.",
+                          });
+                        } finally {
+                          setIsSavingLayout(false);
+                        }
+                      }}
+                    >
+                      {isSavingLayout ? (
+                        <>
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          Speichert …
+                        </>
+                      ) : (
+                        "Layout speichern"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </TabsContent>
             <TabsContent value="database" className="mt-4">
               <DatabaseManager />

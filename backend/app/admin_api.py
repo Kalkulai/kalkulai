@@ -112,7 +112,7 @@ def _product_to_out(data: Dict[str, object]) -> ProductOut:
 @router.get("/products", response_model=List[ProductOut])
 def list_active_products(
     company_id: str = Query(...),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     include_deleted: bool = Query(False),
     _: None = Depends(require_admin),

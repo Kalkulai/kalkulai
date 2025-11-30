@@ -35,6 +35,15 @@ OFFER_TEMPLATE_DEFINITIONS: List[Dict[str, Any]] = [
         "accent": "#b45309",
         "background": "#fffbeb",
     },
+    {
+        "id": "custom",
+        "file": "offer_custom.html",
+        "label": "Eigenes Layout",
+        "tagline": "Individuell & markenscharf",
+        "description": "Nutze deinen eigenen Aufbau, Farben und Textbausteine für maximale Wiedererkennbarkeit.",
+        "accent": "#4f46e5",
+        "background": "#eef2ff",
+    },
 ]
 
 OFFER_TEMPLATE_INDEX: Dict[str, Dict[str, Any]] = {tpl["id"]: tpl for tpl in OFFER_TEMPLATE_DEFINITIONS}

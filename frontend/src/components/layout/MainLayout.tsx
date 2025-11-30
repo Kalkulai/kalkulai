@@ -1,9 +1,11 @@
-import { ReactNode, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ChevronDown,
+  ChevronRight,
   User,
   Settings,
   LogOut,
@@ -28,9 +31,16 @@ import {
   Eye,
   EyeOff,
   Check,
+  Palette,
+  Building2,
+  ShieldCheck,
 } from "lucide-react";
 import DatabaseManager from "@/components/DatabaseManager";
 import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
+import { api } from "@/lib/api";
+import type { OfferTemplateOption } from "@/lib/api";
+import SettingsModal from "@/components/modals/SettingsModal";
+import ProfileModal from "@/components/modals/ProfileModal";
 
 interface MainLayoutProps {
   children: ReactNode;
@@ -46,11 +56,11 @@ const navItems = [
 export default function MainLayout({ children }: MainLayoutProps) {
   const { user, logout, changePassword, changeEmail, updateProfile } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // Dialog states
   const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
-  const [guardRefreshKey, setGuardRefreshKey] = useState(0);
 
   // Profile state
   const [profileName, setProfileName] = useState(user?.name || "");
@@ -71,10 +81,199 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [isChangingEmail, setIsChangingEmail] = useState(false);
   const [emailMessage, setEmailMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // PDF-Template-Einstellungen (Layouts) – global im Einstellungsdialog
+  const [offerTemplates, setOfferTemplates] = useState<OfferTemplateOption[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+
+  // Unternehmens-Einstellungen (rein clientseitig, Speicherung in localStorage)
+  const [companySettings, setCompanySettings] = useState({
+    name: "",
+    street: "",
+    zip: "",
+    city: "",
+    vatId: "",
+    companyId: "",
+  });
+  const [companyMessage, setCompanyMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  type TeamMember = {
+    id: string;
+    name: string;
+    role: "inhaber" | "projektleitung" | "ausführung" | "backoffice";
+    active: boolean;
+    canOffers: boolean;
+    canInvoices: boolean;
+    canDashboard: boolean;
+    isAdmin: boolean;
+  };
+
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
+    {
+      id: "owner",
+      name: user?.name || "Inhaber",
+      role: "inhaber",
+      active: true,
+      canOffers: true,
+      canInvoices: true,
+      canDashboard: true,
+      isAdmin: true,
+    },
+  ]);
+  const [teamMessage, setTeamMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Allgemeine UI-Einstellungen
+  const [generalSettings, setGeneralSettings] = useState({
+    language: "de",
+    theme: "light" as "light" | "dark" | "system",
+    timeFormat24h: true,
+    showTips: true,
+  });
+  const [generalMessage, setGeneralMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Benachrichtigungen (nur lokal)
+  const [notificationSettings, setNotificationSettings] = useState({
+    email: true,
+    inApp: true,
+    teamWeekly: false,
+  });
+
+  // Abrechnung & Pläne (nur lokal, konzeptionell)
+  const [billingSettings, setBillingSettings] = useState({
+    paymentTermDays: "14",
+    showNetTotals: true,
+  });
+
+  // Welche Übersichtskachel aktiv ist
+  const [activeOverviewSection, setActiveOverviewSection] = useState<"general" | "notifications" | "billing">(
+    "general",
+  );
+
+  const templateStorageKey = useMemo(
+    () => (user?.id ? `kalkulai_offer_template_${user.id}` : "kalkulai_offer_template_guest"),
+    [user?.id],
+  );
+
+  const handleTemplateSelect = useCallback(
+    (templateId: string) => {
+      setSelectedTemplateId(templateId);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(templateStorageKey, templateId);
+        // Custom Event, damit z. B. die Angebotsansicht live reagieren kann
+        window.dispatchEvent(new CustomEvent("kalkulai-template-changed", { detail: { templateId } }));
+      }
+    },
+    [templateStorageKey],
+  );
+
+  const activeTemplate = useMemo(() => {
+    if (!offerTemplates.length) {
+      return selectedTemplateId
+        ? {
+            id: selectedTemplateId,
+            label: selectedTemplateId,
+            tagline: "",
+            description: "",
+            accent: "#0f172a",
+            background: "#f4f4f5",
+          }
+        : null;
+    }
+    if (selectedTemplateId) {
+      return offerTemplates.find((tpl) => tpl.id === selectedTemplateId) ?? null;
+    }
+    return offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0] ?? null;
+  }, [offerTemplates, selectedTemplateId]);
+
+  // Templates initial laden
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingTemplates(true);
+    api
+      .pdfTemplates()
+      .then((res) => {
+        if (!isMounted) return;
+        setOfferTemplates(res.templates || []);
+        setTemplateError(null);
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setTemplateError(err?.message || "Layouts konnten nicht geladen werden.");
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingTemplates(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Auswahl aus localStorage übernehmen / Fallback auf Default setzen
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(templateStorageKey);
+    if (stored) {
+      setSelectedTemplateId(stored);
+      return;
+    }
+    if (offerTemplates.length) {
+      const fallback = offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0];
+      if (fallback) {
+        handleTemplateSelect(fallback.id);
+      }
+    }
+  }, [templateStorageKey, offerTemplates, handleTemplateSelect]);
+
+  // Unternehmens-/Team-/Allgemein-Einstellungen aus localStorage laden
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const storedCompany = window.localStorage.getItem("kalkulai_company_profile");
+      if (storedCompany) {
+        const parsed = JSON.parse(storedCompany);
+        setCompanySettings((prev) => ({ ...prev, ...parsed }));
+      }
+    } catch {
+      // ignore parse errors
+    }
+    try {
+      const storedTeam = window.localStorage.getItem("kalkulai_team_members");
+      if (storedTeam) {
+        const parsed = JSON.parse(storedTeam) as TeamMember[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTeamMembers(parsed);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const storedGeneral = window.localStorage.getItem("kalkulai_general_settings");
+      if (storedGeneral) {
+        const parsed = JSON.parse(storedGeneral);
+        setGeneralSettings((prev) => ({ ...prev, ...parsed }));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const settingsCategories = [
-    { title: "Allgemeine Einstellungen", description: "Standardsprache, Zeitzone und Darstellung der Oberfläche anpassen." },
-    { title: "Benachrichtigungen", description: "E-Mail-, In-App- und Team-Updates gezielt konfigurieren." },
-    { title: "Abrechnung & Pläne", description: "Tarifübersicht, Rechnungsarchiv und Zahlungsmethoden einsehen." },
+    {
+      title: "Allgemeine Einstellungen",
+      description: "Sprache, Zeitformat und Darstellung der Oberfläche anpassen.",
+    },
+    {
+      title: "Benachrichtigungen",
+      description: "E-Mail-, In-App- und Team-Updates gezielt konfigurieren.",
+    },
+    {
+      title: "Abrechnung & Pläne",
+      description: "Tarifübersicht, Rechnungsarchiv und Zahlungsmethoden einsehen.",
+    },
   ];
 
   const openProfileDialog = () => {
@@ -91,8 +290,77 @@ export default function MainLayout({ children }: MainLayoutProps) {
   };
 
   const openSettingsDialog = () => {
-    setGuardRefreshKey((k) => k + 1);
     setIsSettingsDialogOpen(true);
+  };
+
+  const handleSaveCompany = () => {
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("kalkulai_company_profile", JSON.stringify(companySettings));
+      }
+      setCompanyMessage({ type: "success", text: "Unternehmensdaten gespeichert (nur lokal)." });
+    } catch (err: any) {
+      setCompanyMessage({
+        type: "error",
+        text: err?.message || "Konnte die Daten nicht speichern.",
+      });
+    }
+  };
+
+  const handleSaveTeam = () => {
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("kalkulai_team_members", JSON.stringify(teamMembers));
+      }
+      setTeamMessage({ type: "success", text: "Team & Rechte gespeichert (nur lokal)." });
+    } catch (err: any) {
+      setTeamMessage({
+        type: "error",
+        text: err?.message || "Konnte die Daten nicht speichern.",
+      });
+    }
+  };
+
+  const handleAddTeamMember = () => {
+    setTeamMembers((prev) => [
+      ...prev,
+      {
+        id: `member-${Date.now()}`,
+        name: "",
+        role: "ausführung",
+        active: true,
+        canOffers: true,
+        canInvoices: false,
+        canDashboard: false,
+        isAdmin: false,
+      },
+    ]);
+  };
+
+  const handleUpdateTeamMember = <K extends keyof TeamMember>(
+    id: string,
+    key: K,
+    value: TeamMember[K],
+  ) => {
+    setTeamMembers((prev) => prev.map((m) => (m.id === id ? { ...m, [key]: value } : m)));
+  };
+
+  const handleRemoveTeamMember = (id: string) => {
+    setTeamMembers((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const handleSaveGeneral = () => {
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("kalkulai_general_settings", JSON.stringify(generalSettings));
+      }
+      setGeneralMessage({ type: "success", text: "Allgemeine Einstellungen gespeichert (nur lokal)." });
+    } catch (err: any) {
+      setGeneralMessage({
+        type: "error",
+        text: err?.message || "Konnte die Einstellungen nicht speichern.",
+      });
+    }
   };
 
   return (
@@ -165,7 +433,10 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   <User className="h-4 w-4 text-slate-500" />
                   <span>Mein Profil</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={openSettingsDialog} className="gap-2.5 py-2.5 cursor-pointer">
+                <DropdownMenuItem 
+                  onSelect={openSettingsDialog} 
+                  className="gap-2.5 py-2.5 cursor-pointer"
+                >
                   <Settings className="h-4 w-4 text-slate-500" />
                   <span>Einstellungen</span>
                 </DropdownMenuItem>
@@ -188,7 +459,8 @@ export default function MainLayout({ children }: MainLayoutProps) {
         {children}
       </main>
 
-      {/* Profile Dialog */}
+      {/* Old Profile Dialog - Disabled, using ProfileModal instead */}
+      {false && (
       <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
         <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
           <DialogHeader className="space-y-1 text-left">
@@ -468,55 +740,13 @@ export default function MainLayout({ children }: MainLayoutProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
-      {/* Settings Dialog */}
-      <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
-        <DialogContent className="max-w-3xl space-y-6 max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="space-y-1 text-left">
-            <DialogTitle>Einstellungen</DialogTitle>
-            <DialogDescription>
-              Richte KalkulAI nach deinen Arbeitsabläufen aus und verwalte deine Präferenzen zentral.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Profile Modal */}
+      <ProfileModal open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen} />
 
-          <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="overview">Übersicht</TabsTrigger>
-              <TabsTrigger value="database">Datenbank</TabsTrigger>
-              <TabsTrigger value="guard">Vergessener Wächter</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="overview" className="mt-4 space-y-3">
-              {settingsCategories.map((category) => (
-                <div
-                  key={category.title}
-                  className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
-                >
-                  <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
-                  <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
-                </div>
-              ))}
-            </TabsContent>
-
-            <TabsContent value="database" className="mt-4">
-              <DatabaseManager />
-            </TabsContent>
-
-            <TabsContent value="guard" className="mt-4 max-h-[65vh] overflow-y-auto pr-1">
-              <GuardMaterialsEditor refreshSignal={guardRefreshKey} />
-            </TabsContent>
-          </Tabs>
-
-          <DialogFooter className="sm:justify-between">
-            <span className="text-xs text-muted-foreground">
-              Änderungen hier wirken sich direkt auf deine lokale Datenbank aus.
-            </span>
-            <Button variant="outline" onClick={() => setIsSettingsDialogOpen(false)}>
-              Schließen
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      {/* Settings Modal */}
+      <SettingsModal open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen} />
+                      </div>
   );
 }

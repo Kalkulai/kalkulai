@@ -12,6 +12,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Angebote = lazy(() => import("./pages/Angebote"));
 const Plantafel = lazy(() => import("./pages/Plantafel"));
 const CommunicationHub = lazy(() => import("./pages/CommunicationHub"));
+const Settings = lazy(() => import("./pages/Settings"));
 const Login = lazy(() => import("./pages/Login"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
@@ -117,6 +118,30 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <CommunicationHub />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings/:tab/:category"
+          element={
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings/:tab"
+          element={
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
             </ProtectedRoute>
           }
         />

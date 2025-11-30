@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ angebot_nr }} – Angebot</title>
+    <style>
+        :root {
+            --primary: {{ layout.primaryColor or "#0f172a" }};
+            --accent: {{ layout.accentColor or "#4f46e5" }};
+            --background: {{ layout.backgroundColor or "#f9fafb" }};
+            --muted: {{ layout.mutedColor or "#6b7280" }};
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 18mm 14mm;
+            font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 12.5px;
+            color: var(--primary);
+            background: var(--background);
+        }
+
+        .canvas {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 24px 26px;
+            box-shadow: 0 18px 60px rgba(15, 23, 42, 0.16);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+
+        .brand-block {
+            max-width: 55%;
+        }
+
+        .brand-title {
+            margin: 0;
+            font-size: {{ layout.titleSize or "22px" }};
+            letter-spacing: -0.03em;
+            color: var(--primary);
+        }
+
+        .brand-subline {
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .meta {
+            min-width: 220px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: {{ layout.metaBackground or "#f3f4f6" }};
+            border: 1px solid rgba(148, 163, 184, 0.6);
+            font-size: 11.5px;
+        }
+
+        .meta-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .meta-label {
+            color: var(--muted);
+        }
+
+        h2 {
+            margin: 16px 0 6px;
+            font-size: 18px;
+            color: var(--accent);
+        }
+
+        .client {
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            padding: 10px 12px;
+            margin-bottom: 16px;
+            background: {{ layout.clientBackground or "#eff6ff" }};
+        }
+
+        .intro {
+            margin-bottom: 18px;
+            line-height: 1.5;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 18px;
+        }
+
+        thead th {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            padding: 8px 6px;
+            border-bottom: 1.2px solid rgba(148, 163, 184, 0.7);
+            background: {{ layout.tableHeaderBackground or "#f3f4f6" }};
+        }
+
+        tbody td {
+            padding: 10px 6px;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .center { text-align: center; }
+        .right { text-align: right; }
+
+        .summary {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 16px;
+            margin-top: 18px;
+        }
+
+        .summary-card {
+            border-radius: 14px;
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            padding: 14px 16px;
+            background: {{ layout.summaryBackground or "#f9fafb" }};
+            font-size: 13px;
+        }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .summary-row:last-child {
+            margin-top: 4px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        footer {
+            margin-top: 26px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(209, 213, 219, 0.9);
+            font-size: 11px;
+            display: flex;
+            justify-content: space-between;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+<div class="canvas">
+    <header>
+        <div class="brand-block">
+            <h1 class="brand-title">{{ layout.companyName or "Max Mustermann GmbH" }}</h1>
+            {% if layout.companyTagline %}
+            <div class="brand-subline">{{ layout.companyTagline }}</div>
+            {% endif %}
+        </div>
+        <div class="meta">
+            <div class="meta-row">
+                <span class="meta-label">Datum</span>
+                <strong>{{ datum | date_format }}</strong>
+            </div>
+            <div class="meta-row">
+                <span class="meta-label">Angebot</span>
+                <strong>{{ angebot_nr }}</strong>
+            </div>
+            {% if layout.referenceText %}
+            <div class="meta-row">
+                <span class="meta-label">Referenz</span>
+                <strong>{{ layout.referenceText }}</strong>
+            </div>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="client">
+        {{ kunde }}
+    </div>
+
+    <h2>{{ layout.offerTitle or "Projektangebot" }}</h2>
+    <div class="intro">
+        {% if layout.introText %}
+            {{ layout.introText | safe }}
+        {% else %}
+            Sehr geehrte Damen und Herren,<br>
+            vielen Dank für Ihre Anfrage. Wir freuen uns, Ihnen das folgende Angebot zu unterbreiten:
+        {% endif %}
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th class="center">Pos.</th>
+            <th>{{ layout.columnTitleName or "Bezeichnung" }}</th>
+            <th class="center">{{ layout.columnTitleQty or "Menge" }}</th>
+            <th class="center">{{ layout.columnTitleUnit or "Einheit" }}</th>
+            <th class="right">{{ layout.columnTitlePrice or "Einzelpreis" }}</th>
+            <th class="right">{{ layout.columnTitleTotal or "Gesamt" }}</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for position in positionen %}
+        <tr>
+            <td class="center">{{ position.nr }}</td>
+            <td>{{ position.name }}</td>
+            <td class="center">{{ position.menge }}</td>
+            <td class="center">{{ position.einheit }}</td>
+            <td class="right">{{ position.epreis | currency }} €</td>
+            <td class="right">{{ position.gesamtpreis | currency }} €</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td class="center" colspan="6">Keine Positionen vorhanden</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="summary">
+        <div class="summary-card">
+            <div class="summary-row">
+                <span>Zwischensumme</span>
+                <span>{{ netto_summe | currency }} €</span>
+            </div>
+            <div class="summary-row">
+                <span>zzgl. {{ ust_satz_prozent }} % USt</span>
+                <span>{{ ust_betrag | currency }} €</span>
+            </div>
+            <div class="summary-row">
+                <span>Gesamtbetrag</span>
+                <span>{{ brutto_summe | currency }} €</span>
+            </div>
+        </div>
+        <div class="summary-card">
+            {% if layout.notesText %}
+                {{ layout.notesText | safe }}
+            {% else %}
+                Die Preise verstehen sich inkl. Material, Lieferung und Entsorgung.
+                Das Angebot bleibt 30 Tage gültig.
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="intro" style="margin-top: 22px;">
+        {% if layout.closingText %}
+            {{ layout.closingText | safe }}
+        {% else %}
+            Mit freundlichen Grüßen<br>
+            Max Mustermann
+        {% endif %}
+    </div>
+
+    <footer>
+        <div>{{ layout.footerLeft or "Geschäftsführer: Max Mustermann" }}</div>
+        <div>{{ layout.footerCenter or "Bank: Sparkasse Passau · IBAN: DE13 9583 9058 3920 552" }}</div>
+        <div>{{ layout.footerRight or "max@example.com · www.example.com" }}</div>
+    </footer>
+</div>
+</body>
+</html>
+
+
