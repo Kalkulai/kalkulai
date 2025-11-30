@@ -35,7 +35,7 @@ export default function OfferEditor({ positions: initialPositions, onSave, onCan
     return pos.map((p, idx) => ({
       ...p,
       nr: idx + 1,
-      gesamtpreis: Math.round((p.menge || 0) * (p.epreis || 0) * 100) / 100,
+      gesamtpreis: Math.round((Math.max(0, Math.ceil(p.menge || 0)) || 0) * (p.epreis || 0) * 100) / 100,
     }));
   }, []);
 
@@ -45,8 +45,13 @@ export default function OfferEditor({ positions: initialPositions, onSave, onCan
       const pos = { ...updated[index] };
 
       if (field === "menge" || field === "epreis") {
-        const numVal = typeof value === "string" ? parseFloat(value) || 0 : value;
-        (pos as any)[field] = numVal;
+        const numVal = typeof value === "string" ? parseFloat(value) || 0 : (value as number);
+        if (field === "menge") {
+          // Menge immer als ganze Zahl nach oben runden
+          (pos as any)[field] = numVal > 0 ? Math.ceil(numVal) : 0;
+        } else {
+          (pos as any)[field] = numVal;
+        }
       } else if (field === "name" || field === "einheit") {
         (pos as any)[field] = String(value);
       }
@@ -148,7 +153,7 @@ export default function OfferEditor({ positions: initialPositions, onSave, onCan
                     onChange={(e) => updatePosition(idx, "menge", e.target.value)}
                     className="h-9 text-sm"
                     min={0}
-                    step="0.5"
+                    step={1}
                   />
                 </div>
                 <div>

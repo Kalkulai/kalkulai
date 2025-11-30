@@ -316,19 +316,38 @@ const DatabaseManager = () => {
     }
   };
 
-  const exportCsv = () => {
-    const csv = [
-      "sku,name,description,unit,volume_l,price_eur,active,category,material_type,unit_package,tags",
-      ...products.map(p => 
-        `"${p.sku}","${p.name}","${p.description || ""}","${p.unit || ""}",${p.volume_l || ""},${p.price_eur || ""},${p.active},"${p.category || ""}","${p.material_type || ""}","${p.unit_package || ""}","${p.tags || ""}"`
-      )
-    ].join("\n");
+  const exportCsv = async () => {
+    try {
+      setLoading(true);
+      // Lade alle Produkte direkt für den Export (ohne Limit)
+      const allProducts = await api.admin.listProducts(companyId, true, 10000);
+      
+      const csv = [
+        "sku,name,description,unit,volume_l,price_eur,active,category,material_type,unit_package,tags",
+        ...allProducts.map(p => 
+          `"${p.sku}","${p.name}","${p.description || ""}","${p.unit || ""}",${p.volume_l || ""},${p.price_eur || ""},${p.active},"${p.category || ""}","${p.material_type || ""}","${p.unit_package || ""}","${p.tags || ""}"`
+        )
+      ].join("\n");
 
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `produkte_${companyId}_${new Date().toISOString().split("T")[0]}.csv`;
-    link.click();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `produkte_${companyId}_${new Date().toISOString().split("T")[0]}.csv`;
+      link.click();
+      
+      toast({
+        title: "✓ Export erfolgreich",
+        description: `${allProducts.length} Produkte wurden exportiert.`,
+      });
+    } catch (e: any) {
+      toast({
+        title: "Fehler beim Export",
+        description: e?.message || "Export konnte nicht durchgeführt werden.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Admin not configured view
@@ -379,6 +398,35 @@ const DatabaseManager = () => {
 
         {/* Products Tab */}
         <TabsContent value="products" className="space-y-4">
+          {/* Statistics */}
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <Package className="w-4 h-4 text-muted-foreground" />
+                <span className="text-muted-foreground">Gesamt:</span>
+                <span className="font-semibold">{products.length} Produkte</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Aktiv:</span>
+                <span className="font-semibold text-green-600">
+                  {products.filter(p => p.active).length}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Inaktiv:</span>
+                <span className="font-semibold text-muted-foreground">
+                  {products.filter(p => !p.active).length}
+                </span>
+              </div>
+              {searchQuery && (
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Gefiltert:</span>
+                  <span className="font-semibold">{filteredProducts.length}</span>
+                </div>
+              )}
+            </div>
+          </Card>
+
           {/* Search & Actions */}
           <Card className="p-4">
             <div className="flex flex-col sm:flex-row gap-3">

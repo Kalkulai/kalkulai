@@ -1,9 +1,16 @@
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from weasyprint import HTML
+
+# Optional import for weasyprint (requires system dependencies)
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+    HTML = None  # type: ignore
 
 
 OFFER_TEMPLATE_DEFINITIONS: List[Dict[str, Any]] = [
@@ -34,6 +41,15 @@ OFFER_TEMPLATE_DEFINITIONS: List[Dict[str, Any]] = [
         "description": "Dunkler Seitenrand, Serifentypografie und goldene Akzente für hochwertige Projekte.",
         "accent": "#b45309",
         "background": "#fffbeb",
+    },
+    {
+        "id": "custom",
+        "file": "offer_custom.html",
+        "label": "Eigenes Layout",
+        "tagline": "Individuell & markenscharf",
+        "description": "Nutze deinen eigenen Aufbau, Farben und Textbausteine für maximale Wiedererkennbarkeit.",
+        "accent": "#4f46e5",
+        "background": "#eef2ff",
     },
 ]
 
@@ -98,6 +114,12 @@ def render_pdf_from_template(env: Environment, template_file: str, context: Dict
     base_url sollte auf das Projekt zeigen (nicht output_dir),
     damit CSS/Assets aus templates/static aufgelöst werden können.
     """
+    if not WEASYPRINT_AVAILABLE or HTML is None:
+        raise RuntimeError(
+            "weasyprint is not available. Install it with: pip install weasyprint\n"
+            "Note: weasyprint requires system dependencies (cairo, pango, etc.)"
+        )
+    
     output_dir.mkdir(parents=True, exist_ok=True)
     html_str = env.get_template(template_file).render(**context)
 

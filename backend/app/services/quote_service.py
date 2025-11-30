@@ -3581,15 +3581,26 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
     positions = convert_to_package_units(positions, ctx.catalog_by_name)
 
     for p in positions:
+        # 1) Menge robust auslesen
         try:
             menge_val = float(p.get("menge", 0))
         except (TypeError, ValueError):
             menge_val = 0.0
+
+        # 2) Mengen immer auf ganze Zahlen nach oben runden
+        if menge_val > 0:
+            menge_val = math.ceil(menge_val)
+        else:
+            menge_val = 0.0
+        p["menge"] = menge_val
+
+        # 3) Einzelpreis robust auslesen (epreis oder einzelpreis)
         try:
-            # Support both "epreis" and "einzelpreis"
             epreis_val = float(p.get("epreis") or p.get("einzelpreis", 0))
         except (TypeError, ValueError):
             epreis_val = 0.0
+
+        # 4) Gesamtpreis aus gerundeter Menge neu berechnen
         p["gesamtpreis"] = round(menge_val * epreis_val, 2)
 
     netto = round(sum(float(p["gesamtpreis"]) for p in positions), 2)

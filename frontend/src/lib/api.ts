@@ -90,6 +90,32 @@ export type OfferTemplateOption = {
   is_default?: boolean;
 };
 
+export type OfferLayoutConfig = {
+  primaryColor?: string;
+  accentColor?: string;
+  backgroundColor?: string;
+  mutedColor?: string;
+  metaBackground?: string;
+  clientBackground?: string;
+  summaryBackground?: string;
+  companyName?: string;
+  companyTagline?: string;
+  offerTitle?: string;
+  introText?: string;
+  closingText?: string;
+  notesText?: string;
+  referenceText?: string;
+  footerLeft?: string;
+  footerCenter?: string;
+  footerRight?: string;
+  columnTitleName?: string;
+  columnTitleQty?: string;
+  columnTitleUnit?: string;
+  columnTitlePrice?: string;
+  columnTitleTotal?: string;
+  titleSize?: string;
+};
+
 // Catalog
 export type CatalogSearchResult = {
   sku: string | null;
@@ -329,9 +355,9 @@ export const api = {
     }),
 
   admin: {
-    listProducts: (companyId: string, includeDeleted = false) =>
+    listProducts: (companyId: string, includeDeleted = false, limit = 500) =>
       jsonFetch<AdminProduct[]>(
-        `/api/admin/products?company_id=${encodeURIComponent(companyId)}&include_deleted=${includeDeleted ? "1" : "0"}`,
+        `/api/admin/products?company_id=${encodeURIComponent(companyId)}&include_deleted=${includeDeleted ? "1" : "0"}&limit=${limit}`,
         {
           method: "GET",
           headers: { ...ADMIN_HEADERS },
@@ -453,4 +479,18 @@ export const api = {
           headers: { Authorization: `Bearer ${token}` },
         }),
     },
-  };
+
+  user: {
+    getOfferLayout: (token: string) =>
+      jsonFetch<{ layout: OfferLayoutConfig | null }>(`/api/auth/layout/offer`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    saveOfferLayout: (token: string, layout: OfferLayoutConfig) =>
+      jsonFetch<{ success: boolean }>(`/api/auth/layout/offer`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ layout }),
+      }),
+  },
+};
