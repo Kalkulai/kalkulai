@@ -23,20 +23,20 @@ from uuid import uuid4
 
 from jinja2 import Environment
 
-from backend.app.error_messages import (
+from app.error_messages import (
     chat_unknown_products_message,
     offer_unknown_products_message,
 )
-from backend.app.uom_convert import harmonize_material_line
-from backend.app.utils import extract_json_array, extract_products_from_output, parse_positions
-from backend.retriever import index_manager
-from backend.retriever.main import rank_main as default_rank_main
-from backend.retriever.thin import search_catalog_thin as default_search_catalog_thin
-from backend.shared.normalize.text import normalize_query as shared_normalize_query
-from backend.shared.normalize.text import tokenize as shared_tokenize
+from app.uom_convert import harmonize_material_line
+from app.utils import extract_json_array, extract_products_from_output, parse_positions
+from retriever import index_manager
+from retriever.main import rank_main as default_rank_main
+from retriever.thin import search_catalog_thin as default_search_catalog_thin
+from shared.normalize.text import normalize_query as shared_normalize_query
+from shared.normalize.text import tokenize as shared_tokenize
 
 CATALOG_MATCH_THRESHOLD = 0.45
-CATALOG_STRONG_MATCH_THRESHOLD = 0.6
+CATALOG_STRONG_MATCH_THRESHOLD = 0.5  # Lowered from 0.6 for better fuzzy matching with dynamic catalogs
 
 NO_DATA_DETAILS_MESSAGE = (
     "Es liegen noch keine Angebotsdaten vor.\n\n"
@@ -484,7 +484,7 @@ def _load_company_catalog_products(company_id: Optional[str]) -> Dict[str, Dict[
     if not company_id:
         return {}
     try:
-        from backend.store import catalog_store
+        from store import catalog_store
     except Exception:
         return {}
 
@@ -505,7 +505,7 @@ def _load_company_synonym_map(company_id: Optional[str]) -> Dict[str, str]:
     if not company_id:
         return {}
     try:
-        from backend.store import catalog_store
+        from store import catalog_store
     except Exception:
         return {}
 
@@ -699,6 +699,50 @@ def _match_catalog_entry(
                     "sku": candidate.get("sku"),
                 }
             )
+
+    # Enhanced fuzzy matching as final fallback
+    if not result["matched"]:
+        try:
+            from shared.fuzzy_matcher import find_best_matches
+            
+            # Get all catalog product names
+            catalog_names = [item.get("name") for item in ctx.catalog_items if item.get("name")]
+            
+            # Try fuzzy matching with threshold 0.25
+            fuzzy_matches = find_best_matches(cleaned, catalog_names, top_k=5, min_score=0.25)
+            
+            if fuzzy_matches:
+                best_match_name, best_score = fuzzy_matches[0]
+                
+                # Find the full catalog entry
+                matched_entry = None
+                for item in ctx.catalog_items:
+                    if item.get("name") == best_match_name:
+                        matched_entry = item
+                        break
+                
+                if matched_entry:
+                    # Check type compatibility
+                    product_type = _classify_product_entry(matched_entry)
+                    if _is_type_compatible(requested_type, product_type, context_text):
+                        result.update({
+                            "matched": True,
+                            "match_type": "fuzzy_enhanced",
+                            "confidence": best_score,
+                            "canonical_name": best_match_name,
+                            "sku": matched_entry.get("sku"),
+                        })
+                
+                # Add all fuzzy matches as suggestions
+                for match_name, match_score in fuzzy_matches:
+                    if match_name not in result["suggestions"]:
+                        result["suggestions"].append(match_name)
+        except ImportError:
+            # Fuzzy matcher not available, skip
+            pass
+        except Exception:
+            # Don't let fuzzy matching break the system
+            pass
 
     return result
 
@@ -2093,7 +2137,7 @@ def rule_scratch_spackle(positions: list[dict], ctx_dict: dict) -> Tuple[bool, d
 
 def rule_travel(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
     """Anfahrtpauschale."""
-    if _has_any(positions, ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung"]):
+    if _has_any(positions, ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung", "fahrt"]):
         return False, None
 
     dist = _ctx_num(ctx_dict, "entfernung_km", 0.0)
@@ -2111,53 +2155,372 @@ def rule_travel(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | Non
     return True, sug
 
 
+# ============================================================================
+# NEUE REGELN FÜR TYPISCHE MALER-ARBEITEN
+# ============================================================================
+
+def rule_sanding(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Schleifarbeiten vor dem Streichen."""
+    if _has_any(positions, ["schleifen", "schleifpapier", "anschleifen", "schliff", "schleifvlies"]):
+        return False, None
+    
+    untergrund = _norm(ctx_dict.get("untergrund", ""))
+    # Nur warnen bei Altanstrich, Holz oder lackierten Flächen
+    if not any(token in untergrund for token in ["altanstrich", "lack", "holz", "fenster", "tür"]):
+        return False, None
+    
+    flaeche = max(1.0, _ctx_num(ctx_dict, "flaeche_m2", 0.0))
+    bogen = max(1, math.ceil(flaeche / 5.0))  # 1 Bogen pro 5m²
+    sug = {
+        "id": "sanding",
+        "name": "Schleifpapier / Schleifvlies",
+        "menge": bogen,
+        "einheit": "Bogen",
+        "reason": f"Untergrund '{ctx_dict.get('untergrund')}' → Anschleifen für bessere Haftung (≈1 Bogen / 5 m²).",
+        "confidence": 0.7,
+        "severity": "medium",
+        "category": "Vorarbeiten",
+    }
+    return True, sug
+
+
+def rule_paint_tools(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Farbrollen & Pinsel als Verschleißmaterial."""
+    if _has_any(positions, ["rolle", "farbrolle", "pinsel", "flachpinsel", "heizkörperpinsel"]):
+        return False, None
+    
+    # Nur warnen wenn Farbe vorhanden
+    if not _has_any(positions, ["farbe", "lack", "dispersionsfarbe", "latexfarbe", "acryl", "lasur"]):
+        return False, None
+    
+    flaeche = max(1.0, _ctx_num(ctx_dict, "flaeche_m2", 0.0))
+    rollen = max(1, math.ceil(flaeche / 50.0))  # 1 Rolle pro 50m²
+    sug = {
+        "id": "paint_tools",
+        "name": "Farbrolle + Pinsel-Set",
+        "menge": rollen,
+        "einheit": "Set",
+        "reason": f"{int(flaeche)} m² Fläche → Verschleißmaterial (≈1 Set / 50 m²).",
+        "confidence": 0.6,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+def rule_protection_gloves(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Schutzhandschuhe bei Lackier-/Reinigungsarbeiten."""
+    if _has_any(positions, ["handschuhe", "schutzhandschuhe", "nitrilhandschuhe", "einweghandschuhe"]):
+        return False, None
+    
+    # Nur warnen bei Lacken, Lösemitteln oder Reinigern
+    needs_protection = _has_any(positions, ["lack", "lasur", "verdünnung", "abbeizer", "reiniger", "lösemittel"])
+    if not needs_protection:
+        return False, None
+    
+    sug = {
+        "id": "protection_gloves",
+        "name": "Schutzhandschuhe (Nitril)",
+        "menge": 1,
+        "einheit": "Pack",
+        "reason": "Lackier-/Lösemittelarbeiten → Hautschutz empfohlen.",
+        "confidence": 0.65,
+        "severity": "medium",
+        "category": "Arbeitsschutz",
+    }
+    return True, sug
+
+
+def rule_dust_mask(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Staubschutzmaske bei Schleif-/Spachtelarbeiten."""
+    if _has_any(positions, ["maske", "atemschutz", "staubmaske", "ffp2", "mundschutz"]):
+        return False, None
+    
+    # Nur warnen bei staubigen Arbeiten
+    needs_mask = _has_any(positions, ["schleifen", "spachtel", "abbeizer", "entfernen"]) or \
+                 any(token in _norm(ctx_dict.get("untergrund", "")) for token in ["tapete", "altanstrich"])
+    if not needs_mask:
+        return False, None
+    
+    sug = {
+        "id": "dust_mask",
+        "name": "Staubschutzmaske FFP2",
+        "menge": 1,
+        "einheit": "Pack",
+        "reason": "Schleif-/Spachtelarbeiten → Atemschutz empfohlen.",
+        "confidence": 0.6,
+        "severity": "low",
+        "category": "Arbeitsschutz",
+    }
+    return True, sug
+
+
+def rule_cleaning_supplies(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Reinigungsmittel/Pinselreiniger."""
+    if _has_any(positions, ["reiniger", "pinselreiniger", "verdünnung", "waschbenzin"]):
+        return False, None
+    
+    # Nur warnen bei Lacken (nicht bei wasserbasierten Farben)
+    if not _has_any(positions, ["lack", "lasur", "kunstharz", "alkydharz"]):
+        return False, None
+    
+    sug = {
+        "id": "cleaning_supplies",
+        "name": "Pinselreiniger / Verdünnung",
+        "menge": 1,
+        "einheit": "L",
+        "reason": "Lackarbeiten → Reinigungsmittel für Werkzeuge.",
+        "confidence": 0.5,
+        "severity": "low",
+        "category": "Reinigung",
+    }
+    return True, sug
+
+
+def rule_sealant(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Maleracryl/Silikon für Fugen und Anschlüsse."""
+    if _has_any(positions, ["acryl", "silikon", "fugen", "maleracryl", "dichtstoff"]):
+        return False, None
+    
+    besonderheiten = _norm(ctx_dict.get("besonderheiten", ""))
+    raum = _norm(ctx_dict.get("raum", ""))
+    
+    # Warnen bei Bad/Küche oder wenn Fenster/Türen erwähnt
+    needs_sealant = any(token in raum for token in ["bad", "küche", "nassraum"]) or \
+                    any(token in besonderheiten for token in ["fenster", "tür", "anschluss", "fuge"])
+    if not needs_sealant:
+        return False, None
+    
+    sug = {
+        "id": "sealant",
+        "name": "Maleracryl / Fugendichtstoff",
+        "menge": 1,
+        "einheit": "Kartusche",
+        "reason": f"Raum/Bereich '{ctx_dict.get('raum', 'unbekannt')}' → Fugenabdichtung empfohlen.",
+        "confidence": 0.55,
+        "severity": "medium",
+        "category": "Abdichtung",
+    }
+    return True, sug
+
+
+def rule_paint_bucket(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Farbeimer & Abstreifgitter."""
+    if _has_any(positions, ["farbeimer", "eimer", "abstreifgitter", "farbwanne"]):
+        return False, None
+    
+    # Nur warnen wenn größere Flächen gestrichen werden
+    flaeche = _ctx_num(ctx_dict, "flaeche_m2", 0.0)
+    if flaeche < 20:  # Unter 20m² nicht nötig
+        return False, None
+    
+    sug = {
+        "id": "paint_bucket",
+        "name": "Farbeimer mit Abstreifgitter",
+        "menge": 1,
+        "einheit": "Set",
+        "reason": f"{int(flaeche)} m² Fläche → Farbeimer für effizientes Arbeiten.",
+        "confidence": 0.5,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+def rule_stirring_stick(positions: list[dict], ctx_dict: dict) -> Tuple[bool, dict | None]:
+    """Rührstab für größere Farbmengen."""
+    if _has_any(positions, ["rührstab", "rührquirl", "mischer", "rühren"]):
+        return False, None
+    
+    # Nur warnen wenn viel Farbe benötigt wird
+    flaeche = _ctx_num(ctx_dict, "flaeche_m2", 0.0)
+    if flaeche < 50:  # Unter 50m² nicht nötig
+        return False, None
+    
+    sug = {
+        "id": "stirring_stick",
+        "name": "Rührstab / Rührquirl",
+        "menge": 1,
+        "einheit": "Stück",
+        "reason": f"Große Farbmengen ({int(flaeche)} m²) → Farbe gründlich aufrühren.",
+        "confidence": 0.4,
+        "severity": "low",
+        "category": "Werkzeuge",
+    }
+    return True, sug
+
+
+# ============================================================================
+# REGEL-REGISTRY
+# ============================================================================
+
 REVENUE_RULES = [
+    # Vorarbeiten (wichtig!)
     ("primer_tiefgrund", "Grundierung/Haftverbesserung fehlt?", rule_primer_tiefgrund),
-    ("masking_cover", "Abdecken/Schutz fehlt?", rule_masking_cover),
+    ("scratch_spackle", "Spachtelarbeiten fehlen?", rule_scratch_spackle),
+    ("sanding", "Schleifarbeiten fehlen?", rule_sanding),
+    
+    # Abdecken & Schutz
+    ("masking_cover", "Abdeckmaterial fehlt?", rule_masking_cover),
     ("masking_tape", "Abklebeband fehlt?", rule_masking_tape),
-    ("scratch_spackle", "Spachtelarbeiten (Kratz-/Zwischenspachtelung) fehlen?", rule_scratch_spackle),
+    
+    # Werkzeuge & Verbrauchsmaterial
+    ("paint_tools", "Farbrollen/Pinsel fehlen?", rule_paint_tools),
+    ("paint_bucket", "Farbeimer fehlt?", rule_paint_bucket),
+    ("stirring_stick", "Rührstab fehlt?", rule_stirring_stick),
+    
+    # Arbeitsschutz
+    ("protection_gloves", "Schutzhandschuhe fehlen?", rule_protection_gloves),
+    ("dust_mask", "Atemschutz fehlt?", rule_dust_mask),
+    
+    # Abdichtung & Reinigung
+    ("sealant", "Fugenabdichtung fehlt?", rule_sealant),
+    ("cleaning_supplies", "Reinigungsmittel fehlen?", rule_cleaning_supplies),
+    
+    # Allgemeines
     ("travel", "Anfahrtpauschale fehlt?", rule_travel),
 ]
 
 BUILTIN_GUARD_ITEMS: List[Dict[str, Any]] = [
+    # Vorarbeiten
     {
         "id": "primer_tiefgrund",
         "name": "Tiefgrund / Grundierung",
-        "severity": "medium",
+        "keywords": ["tiefgrund", "grundierung", "primer", "haftgrund"],
+        "severity": "high",
         "category": "Vorarbeiten",
-        "description": "Empfiehlt saugfähige Grundierung, wenn Untergrund oder Positionen keine Haftbrücke enthalten.",
+        "description": "Prüft ob eine Grundierung für saugende Untergründe vorhanden ist.",
+        "einheit": "L",
         "editable": True,
     },
     {
-        "id": "masking_cover",
-        "name": "Abdeckmaterial",
+        "id": "scratch_spackle",
+        "name": "Spachtelmasse",
+        "keywords": ["spachtel", "spachtelmasse", "kratzspachtel", "feinspachtel"],
         "severity": "medium",
-        "category": "Schutz",
-        "description": "Überprüft, ob Folien/Vlies zum Abdecken empfindlicher Bereiche vorgesehen sind.",
+        "category": "Vorarbeiten",
+        "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder unebenen Flächen vor.",
+        "einheit": "kg",
+        "editable": True,
+    },
+    {
+        "id": "sanding",
+        "name": "Schleifarbeiten",
+        "keywords": ["schleifen", "schleifpapier", "anschleifen", "schleifvlies"],
+        "severity": "medium",
+        "category": "Vorarbeiten",
+        "description": "Empfiehlt Anschleifen bei Altanstrichen, Lack oder Holz.",
+        "einheit": "Bogen",
+        "editable": True,
+    },
+    
+    # Abdecken & Schutz
+    {
+        "id": "masking_cover",
+        "name": "Abdeckfolie / Vlies",
+        "keywords": ["abdeckfolie", "abdeckvlies", "abdecken", "schutzfolie", "folie"],
+        "severity": "medium",
+        "category": "Abdecken",
+        "description": "Prüft ob Abdeckmaterial zum Schutz von Böden vorhanden ist.",
+        "einheit": "Rolle",
         "editable": True,
     },
     {
         "id": "masking_tape",
         "name": "Abklebeband / Kreppband",
+        "keywords": ["abklebeband", "kreppband", "abkleben", "malerkrepp", "goldband"],
         "severity": "high",
-        "category": "Schutz",
-        "description": "Empfiehlt Kreppband in passenden Rollenlängen relativ zur Kantenmeterzahl.",
+        "category": "Abdecken",
+        "description": "Empfiehlt Kreppband für saubere Kanten an Fenstern, Türen und Ecken.",
+        "einheit": "Rolle",
+        "editable": True,
+    },
+    
+    # Werkzeuge
+    {
+        "id": "paint_tools",
+        "name": "Farbrollen & Pinsel",
+        "keywords": ["rolle", "farbrolle", "pinsel", "flachpinsel", "streichwerkzeug"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Prüft ob Streichwerkzeuge als Verschleißmaterial eingeplant sind.",
+        "einheit": "Set",
         "editable": True,
     },
     {
-        "id": "scratch_spackle",
-        "name": "Zwischenspachtelung",
-        "severity": "medium",
-        "category": "Vorarbeiten",
-        "description": "Schlägt Spachtelarbeiten bei Altanstrichen oder Tapeten vor.",
+        "id": "paint_bucket",
+        "name": "Farbeimer & Gitter",
+        "keywords": ["farbeimer", "eimer", "abstreifgitter", "farbwanne"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Empfiehlt Farbeimer bei größeren Streichflächen.",
+        "einheit": "Set",
         "editable": True,
     },
+    {
+        "id": "stirring_stick",
+        "name": "Rührstab / Mischer",
+        "keywords": ["rührstab", "rührquirl", "mischer"],
+        "severity": "low",
+        "category": "Werkzeuge",
+        "description": "Empfiehlt Rührwerkzeug bei großen Farbmengen.",
+        "einheit": "Stück",
+        "editable": True,
+    },
+    
+    # Arbeitsschutz
+    {
+        "id": "protection_gloves",
+        "name": "Schutzhandschuhe",
+        "keywords": ["handschuhe", "schutzhandschuhe", "nitrilhandschuhe", "einweghandschuhe"],
+        "severity": "medium",
+        "category": "Arbeitsschutz",
+        "description": "Empfiehlt Hautschutz bei Lacken und Lösemitteln.",
+        "einheit": "Pack",
+        "editable": True,
+    },
+    {
+        "id": "dust_mask",
+        "name": "Atemschutzmaske",
+        "keywords": ["maske", "atemschutz", "staubmaske", "ffp2", "mundschutz"],
+        "severity": "low",
+        "category": "Arbeitsschutz",
+        "description": "Empfiehlt Atemschutz bei Schleif- und Spachtelarbeiten.",
+        "einheit": "Pack",
+        "editable": True,
+    },
+    
+    # Abdichtung & Reinigung
+    {
+        "id": "sealant",
+        "name": "Maleracryl / Silikon",
+        "keywords": ["acryl", "silikon", "fugen", "maleracryl", "dichtstoff", "kartusche"],
+        "severity": "medium",
+        "category": "Abdichtung",
+        "description": "Empfiehlt Fugenabdichtung in Nassräumen und bei Fenster-/Türanschlüssen.",
+        "einheit": "Kartusche",
+        "editable": True,
+    },
+    {
+        "id": "cleaning_supplies",
+        "name": "Reinigungsmittel",
+        "keywords": ["reiniger", "pinselreiniger", "verdünnung", "waschbenzin"],
+        "severity": "low",
+        "category": "Reinigung",
+        "description": "Empfiehlt Reinigungsmittel für Werkzeuge bei Lackarbeiten.",
+        "einheit": "L",
+        "editable": True,
+    },
+    
+    # Allgemeines
     {
         "id": "travel",
         "name": "Anfahrtpauschale",
+        "keywords": ["anfahrt", "fahrtkosten", "an- und abfahrt", "anlieferung"],
         "severity": "low",
-        "category": "Allgemein",
-        "description": "Stellt sicher, dass Fahrtkosten bzw. Pauschalen eingeplant sind.",
+        "category": "Allgemeines",
+        "description": "Stellt sicher, dass Fahrtkosten eingeplant sind.",
+        "einheit": "Pauschale",
         "editable": True,
     },
 ]
@@ -3138,7 +3501,33 @@ def generate_offer_positions(
             base_unit_hint = _resolve_canonical_unit(entry.get("unit"), entry.get("name"), entry.get("description"))
         else:
             base_unit_hint = _resolve_canonical_unit(pos.get("einheit"), pos.get("name"), None)
-        pos2, harmonize_reasons = harmonize_material_line(
+        try:
+            original_qty = float(pos.get("menge", 0))
+        except (TypeError, ValueError):
+            original_qty = 0.0
+        try:
+            original_epreis = float(pos.get("epreis", 0))
+        except (TypeError, ValueError):
+            original_epreis = 0.0
+        
+        # NEU: Wenn kein Preis vorhanden, aus der Datenbank laden
+        if original_epreis <= 0 and entry:
+            db_price = entry.get("price_eur")
+            if db_price is not None:
+                try:
+                    original_epreis = float(db_price)
+                    pos["epreis"] = original_epreis
+                except (TypeError, ValueError):
+                    pass
+        
+        try:
+            original_total = float(pos.get("gesamtpreis", 0))
+        except (TypeError, ValueError):
+            original_total = 0.0
+        if not original_total and original_qty and original_epreis:
+            original_total = round(original_qty * original_epreis, 2)
+
+        pos2, harmonize_reasons, conversion_info = harmonize_material_line(
             pos,
             pack_info=pack_info,
             base_unit_hint=base_unit_hint or None,
@@ -3147,23 +3536,49 @@ def generate_offer_positions(
             pos2.setdefault("reasons", []).extend(harmonize_reasons)
         try:
             menge_val = float(pos2.get("menge", 0))
-            pos2["menge"] = int(menge_val) if menge_val.is_integer() else round(menge_val, 3)
+            normalized_qty = int(menge_val) if menge_val.is_integer() else round(menge_val, 3)
+            pos2["menge"] = normalized_qty
+            menge_val = float(pos2["menge"])
         except (TypeError, ValueError):
-            pass
+            menge_val = 0.0
         if base_unit_hint:
             pos2["einheit"] = base_unit_hint
+        conversion_applied = conversion_info is not None
+        if menge_val > 0 and original_total:
+            corrected_total = round(original_total, 2)
+            decimals = 4 if conversion_applied else 2
+            # Keep the total from the LLM output but adapt the unit price so pack-to-base
+            # conversions express prices per base unit instead of per package.
+            unit_price = corrected_total / menge_val
+            pos2["epreis"] = round(unit_price, decimals)
+            pos2["gesamtpreis"] = corrected_total
+        else:
+            try:
+                epreis_val = float(pos2.get("epreis", 0))
+            except (TypeError, ValueError):
+                epreis_val = 0.0
+            pos2["gesamtpreis"] = round(epreis_val * menge_val, 2)
         harmonized_positions.append(pos2)
     positions = _enforce_locked_quantities(harmonized_positions, latest_items, ctx)
-
-    return {"positions": positions, "raw": answer}
+    final_positions = positions
+    # raw now mirrors the final offer positions so clients see consistent numbers everywhere.
+    return {"positions": final_positions, "raw": json.dumps(final_positions, ensure_ascii=False)}
 
 
 def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceContext) -> Dict[str, Any]:
-    from backend.app.pdf import render_pdf_from_template
+    from app.pdf import (
+        DEFAULT_OFFER_TEMPLATE_ID,
+        render_pdf_from_template,
+        resolve_offer_template,
+    )
 
     positions = payload.get("positions")
     if not positions or not isinstance(positions, list):
         raise ServiceError("positions[] required", status_code=400)
+
+    # Convert positions to package units (Stück) for PDF
+    from shared.package_converter import convert_to_package_units
+    positions = convert_to_package_units(positions, ctx.catalog_by_name)
 
     for p in positions:
         try:
@@ -3171,7 +3586,8 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
         except (TypeError, ValueError):
             menge_val = 0.0
         try:
-            epreis_val = float(p.get("epreis", 0))
+            # Support both "epreis" and "einzelpreis"
+            epreis_val = float(p.get("epreis") or p.get("einzelpreis", 0))
         except (TypeError, ValueError):
             epreis_val = 0.0
         p["gesamtpreis"] = round(menge_val * epreis_val, 2)
@@ -3191,9 +3607,12 @@ def render_offer_or_invoice_pdf(*, payload: Dict[str, Any], ctx: QuoteServiceCon
         "ust_satz_prozent": int(ctx.vat_rate * 100),
     }
 
-    pdf_path = render_pdf_from_template(ctx.env, context, ctx.output_dir)
+    template_id = payload.get("template_id") or payload.get("template") or DEFAULT_OFFER_TEMPLATE_ID
+    template_def = resolve_offer_template(str(template_id) if template_id is not None else None)
+
+    pdf_path = render_pdf_from_template(ctx.env, template_def["file"], context, ctx.output_dir)
     rel = Path(pdf_path).relative_to(ctx.output_dir)
-    return {"pdf_url": f"/outputs/{rel}", "context": context}
+    return {"pdf_url": f"/outputs/{rel}", "context": context, "template_id": template_def["id"]}
 
 
 def wizard_next_step(*, payload: Dict[str, Any], ctx: QuoteServiceContext) -> Dict[str, Any]:

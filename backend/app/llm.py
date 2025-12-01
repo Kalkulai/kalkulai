@@ -1,7 +1,9 @@
 import os
 from textwrap import dedent
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain, ConversationalRetrievalChain
+from langchain_core.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from langchain.chains import ConversationalRetrievalChain
+from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain.memory import ConversationBufferWindowMemory
 
 
@@ -135,9 +137,16 @@ B) Nur-Update statt Neu-Schätzung: Nachträgliche Mengen/Materialangaben sind U
 C) Positionsabgleich (inhaltlich): Neue Angaben als Anpassung einer vorhandenen Position interpretieren, wenn gleiche Funktion (z. B. Farbe, Grundierung, Lack).
 D) Atomare Änderung: Ausschließlich die Menge der betroffenen Position ersetzen. Andere Werte/Positionen bleiben unverändert. Aktualisierte Mengen mit "(Nutzervorgabe)" kennzeichnen; version um +1 erhöhen.
 E) Keine Gebinde-Logik: Nur Basis-Einheiten (kg, L, m², m, Stück) ausgeben.
-F) Transparenz & Rückfragen: Bei Unsicherheiten (Deckkraft, Schichtdicke, Flächenangabe) kurze Einschätzung + gezielte Klärungsfrage statt Annahmen/Neuberechnung.
-G) Sicherheitsreserve Hauptmaterialien: Farbe/Spachtel/Grundierung/Lack mit ~5–15 % Reserve, praxisgerecht runden und Reserve kurz begründen.
-H) Hilfs-/Verbrauchsmaterial: 10–30 % Aufschlag je nach Größe/Komplexität, sinnvoll runden und begründen.
+F) **MATERIALIEN-SPEZIFIKATION (KRITISCH):**
+   - Verwende IMMER vollständige, spezifische Produktnamen mit ALLEN vom Kunden genannten Eigenschaften
+   - Inkludiere Produkttyp + Eigenschaften (Farbe, Anwendung, etc.)
+   - Beispiele RICHTIG: "Dispersionsfarbe weiß", "Tiefengrund", "Kreppband 19mm", "Acryllack weiß hochglänzend"
+   - Beispiele FALSCH: "Farbe", "Grundierung", "Klebeband", "Lack"
+   - Bei generischen User-Angaben ("weiße Farbe"): Interpretiere als "Dispersionsfarbe weiß" (Standard für Innenanstrich)
+   - Bei unklarem Produkttyp: Kurze Rückfrage statt generischem Begriff
+G) Transparenz & Rückfragen: Bei Unsicherheiten (Deckkraft, Schichtdicke, Flächenangabe) kurze Einschätzung + gezielte Klärungsfrage statt Annahmen/Neuberechnung.
+H) Sicherheitsreserve Hauptmaterialien: Farbe/Spachtel/Grundierung/Lack mit ~5–15 % Reserve, praxisgerecht runden und Reserve kurz begründen.
+I) Hilfs-/Verbrauchsmaterial: 10–30 % Aufschlag je nach Größe/Komplexität, sinnvoll runden und begründen.
 I) Flächenlogik:
    - Wenn Grundfläche (m²) und Raumhöhe vorliegen, Wandfläche selbst berechnen.
    - Formel: Wandfläche ≈ Umfang × Höhe. Falls Umfang fehlt → Standard-Annahme rechteckig/quadratisch.

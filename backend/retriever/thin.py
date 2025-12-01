@@ -12,7 +12,7 @@ try:  # pragma: no cover - optional dependency
 except ModuleNotFoundError:  # pragma: no cover - graceful degradation
     yaml = None
 
-from backend.shared.normalize import (  # type: ignore[import]
+from shared.normalize import (  # type: ignore[import]
     apply_synonyms,
     load_synonyms,
     normalize_query,

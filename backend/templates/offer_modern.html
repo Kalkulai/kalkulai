@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ angebot_nr }} – Angebot</title>
+    <style>
+        :root {
+            --accent: #0ea5e9;
+            --accent-dark: #0284c7;
+            --text: #0f172a;
+            --muted: #475569;
+            --surface: #f8fafc;
+            --card: #ffffff;
+            --border: #e2e8f0;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 18mm 14mm;
+            font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+            font-size: 12.5px;
+            color: var(--text);
+            background: linear-gradient(135deg, #eef2ff 0%, #f0fdfa 40%, #fff 100%);
+        }
+
+        .page {
+            background: var(--card);
+            border-radius: 16px;
+            padding: 28px 32px;
+            box-shadow: 0 25px 80px rgba(15, 23, 42, 0.15);
+            border: 1px solid rgba(14, 165, 233, 0.15);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 28px;
+        }
+
+        .company {
+            max-width: 50%;
+        }
+
+        .company h1 {
+            margin: 0 0 6px;
+            font-size: 22px;
+            letter-spacing: -0.5px;
+        }
+
+        .meta {
+            background: var(--surface);
+            padding: 14px 18px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            min-width: 220px;
+        }
+
+        .meta div {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-size: 11.5px;
+        }
+
+        .meta span {
+            color: var(--muted);
+        }
+
+        h2 {
+            margin: 12px 0 4px;
+            font-size: 18px;
+            color: var(--accent-dark);
+        }
+
+        .client-card {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            padding: 14px 18px;
+            margin-bottom: 18px;
+            background: #e0f2fe;
+        }
+
+        .intro {
+            margin-bottom: 24px;
+            line-height: 1.5;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+
+        thead th {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            background: var(--surface);
+            border-bottom: 1.5px solid var(--border);
+            padding: 10px 8px;
+        }
+
+        tbody td {
+            padding: 12px 8px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .center {
+            text-align: center;
+        }
+
+        .right {
+            text-align: right;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 18px;
+            margin: 24px 0;
+        }
+
+        .summary-card {
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            padding: 18px 20px;
+            background: var(--surface);
+        }
+
+        .summary-card ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .summary-card li {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 13px;
+        }
+
+        .summary-card li strong {
+            font-size: 14px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-top: 20px;
+        }
+
+        .info-box {
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            padding: 14px 18px;
+            background: #fff;
+        }
+
+        .info-box h4 {
+            margin: 0 0 6px;
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            font-size: 11.5px;
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <header>
+        <div class="company">
+            <h1>Max Mustermann GmbH</h1>
+            <div>Musterstraße 1 · 12345 Musterstadt</div>
+            <div>+49 123 4567-89 · max@example.com</div>
+            <div>www.example.com</div>
+        </div>
+        <div class="meta">
+            <div><span>Datum</span><strong>{{ datum | date_format }}</strong></div>
+            <div><span>Angebot</span><strong>{{ angebot_nr }}</strong></div>
+            <div><span>Kundennummer</span><strong>K-20250601</strong></div>
+            <div><span>Kontakt</span><strong>Lisa Schneider</strong></div>
+            <div><span>Gültig bis</span><strong>30 Tage</strong></div>
+        </div>
+    </header>
+
+    <div class="client-card">
+        {{ kunde }}
+    </div>
+
+    <h2>Projektangebot</h2>
+    <div class="intro">
+        Sehr geehrte Damen und Herren,<br>
+        vielen Dank für Ihre Anfrage. Wir freuen uns, Ihnen das folgende Angebot zu unterbreiten:
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th class="center">Pos.</th>
+            <th>Bezeichnung</th>
+            <th class="center">Menge</th>
+            <th class="center">Einheit</th>
+            <th class="right">Einzelpreis</th>
+            <th class="right">Gesamt</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for position in positionen %}
+        <tr>
+            <td class="center">{{ position.nr }}</td>
+            <td>{{ position.name }}</td>
+            <td class="center">{{ position.menge }}</td>
+            <td class="center">{{ position.einheit }}</td>
+            <td class="right">{{ position.epreis | currency }} €</td>
+            <td class="right">{{ position.gesamtpreis | currency }} €</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td class="center" colspan="6">Keine Positionen vorhanden</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="summary">
+        <div class="summary-card">
+            <ul>
+                <li><span>Zwischensumme</span><strong>{{ netto_summe | currency }} €</strong></li>
+                <li><span>zzgl. {{ ust_satz_prozent }} % USt</span><strong>{{ ust_betrag | currency }} €</strong></li>
+                <li><span><strong>Gesamtbetrag</strong></span><strong>{{ brutto_summe | currency }} €</strong></li>
+            </ul>
+        </div>
+        <div class="summary-card">
+            <p><strong>Hinweis</strong></p>
+            <p style="margin:0; color: var(--muted); line-height: 1.4;">
+                Die Preise verstehen sich inkl. Material, Lieferung und Entsorgung.
+                Das Angebot bleibt 30 Tage gültig.
+            </p>
+        </div>
+    </div>
+
+    <div class="info-grid">
+        <div class="info-box">
+            <h4>Lieferweg</h4>
+            <div>Lieferung frei Bordsteinkante durch Spedition</div>
+        </div>
+        <div class="info-box">
+            <h4>Liefertermin</h4>
+            <div>ca. 2–3 Wochen nach Auftragsbestätigung</div>
+        </div>
+        <div class="info-box">
+            <h4>Konditionen</h4>
+            <div>Zahlbar innerhalb 14 Tagen netto, Eigentumsvorbehalt bis zur vollständigen Zahlung.</div>
+        </div>
+    </div>
+
+    <div class="intro" style="margin-top: 26px;">
+        Mit freundlichen Grüßen<br>
+        Max Mustermann
+    </div>
+
+    <footer>
+        <div>Geschäftsführer: Max Mustermann</div>
+        <div>Bank: Sparkasse Passau · IBAN: DE13 9583 9058 3920 552</div>
+        <div>E-Mail: max@example.com · Web: www.example.com</div>
+    </footer>
+</div>
+</body>
+</html>
+

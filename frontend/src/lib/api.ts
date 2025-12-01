@@ -5,14 +5,17 @@ const API_BASE = RAW_BASE.replace(/\/+$/, "");
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || "";
 const ADMIN_HEADERS = ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
 
-// --- Fetch-Helper (JSON) ---
+// Fetch Helper (JSON)
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 
   const res = await fetch(url, {
-    method: "GET",
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
+    method: init?.method || "GET",
+    headers: { 
+      "Content-Type": "application/json", 
+      ...(init?.headers || {}) 
+    },
   });
 
   // Text lesen, dann versuchen JSON zu parsen
@@ -29,7 +32,16 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    const detail = data?.detail ? ` – ${data.detail}` : "";
+    // Handle structured error objects (e.g. {error: "unknown_products", message: "..."})
+    let detail = "";
+    if (data?.detail) {
+      if (typeof data.detail === "object") {
+        // Extract message from structured error object
+        detail = ` – ${data.detail.message || JSON.stringify(data.detail)}`;
+      } else {
+        detail = ` – ${data.detail}`;
+      }
+    }
     throw new Error(`HTTP ${res.status}${detail}`);
   }
 
@@ -63,8 +75,20 @@ export type PdfRequestPayload = {
   kunde?: string;
   angebot_nr?: string;
   datum?: string;
+  template_id?: string;
+  template?: string;
 };
-export type PdfResponse = { pdf_url: string; context: any };
+export type PdfResponse = { pdf_url: string; context: any; template_id?: string };
+
+export type OfferTemplateOption = {
+  id: string;
+  label: string;
+  tagline: string;
+  description: string;
+  accent: string;
+  background: string;
+  is_default?: boolean;
+};
 
 // Catalog
 export type CatalogSearchResult = {
@@ -158,16 +182,77 @@ export type ResetResponse = {
   message?: string;
 };
 
+// Speech (Azure)
+export type SpeechTokenResponse = {
+  token: string;
+  region: string;
+  expires_in_seconds: number;
+};
+
+export type SpeechConfigResponse = {
+  region: string;
+  enabled: boolean;
+};
+
 // Admin
 export type AdminProduct = {
   company_id: string;
   sku: string;
   name: string;
   description?: string | null;
+  
+  // Pricing & Units
+  price_eur?: number | null;
+  unit?: string | null;
+  volume_l?: number | null;
+  
+  // Classification
+  category?: string | null;
+  material_type?: string | null;
+  unit_package?: string | null;
+  tags?: string | null;
+  
   active: boolean;
   updated_at?: string | null;
 };
 export type SynonymMap = Record<string, string[]>;
+
+// Offers (Bibliothek)
+export type Offer = {
+  id: number;
+  user_id: number;
+  title: string;
+  kunde: string | null;
+  positions: OfferPosition[];
+  notes: string | null;
+  status: "draft" | "sent" | "accepted" | "rejected";
+  netto_summe: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OffersListResponse = {
+  offers: Offer[];
+};
+
+export type OfferDetailResponse = {
+  offer: Offer;
+};
+
+export type CreateOfferData = {
+  title: string;
+  kunde?: string;
+  positions: OfferPosition[];
+  notes?: string;
+};
+
+export type UpdateOfferData = {
+  title?: string;
+  kunde?: string;
+  positions?: OfferPosition[];
+  notes?: string;
+  status?: string;
+};
 
 // ------------------------------------------------------------
 //                        API-Client
@@ -182,6 +267,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+
+  // --- Speech (Azure) ---
+  speechConfig: () => jsonFetch<SpeechConfigResponse>(`/api/speech/config`),
+  speechToken: () => jsonFetch<SpeechTokenResponse>(`/api/speech/token`),
 
   // Chat (LLM1)
   chat: (message: string) =>
@@ -209,6 +298,11 @@ export const api = {
     jsonFetch<PdfResponse>(`/api/pdf`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  pdfTemplates: () =>
+    jsonFetch<{ templates: OfferTemplateOption[] }>(`/api/pdf/templates`, {
+      method: "GET",
     }),
 
   // Catalog search (thin retrieval)
@@ -261,7 +355,19 @@ export const api = {
       ),
     upsertProduct: (
       companyId: string,
-      product: { sku: string; name: string; description?: string; active?: boolean },
+      product: { 
+        sku: string; 
+        name: string; 
+        description?: string; 
+        price_eur?: number | null;
+        unit?: string | null;
+        volume_l?: number | null;
+        category?: string | null;
+        material_type?: string | null;
+        unit_package?: string | null;
+        tags?: string | null;
+        active?: boolean;
+      },
     ) =>
       jsonFetch<AdminProduct>(`/api/admin/products`, {
         method: "POST",
@@ -271,6 +377,13 @@ export const api = {
           sku: product.sku,
           name: product.name,
           description: product.description ?? "",
+          price_eur: product.price_eur ?? null,
+          unit: product.unit ?? null,
+          volume_l: product.volume_l ?? null,
+          category: product.category ?? null,
+          material_type: product.material_type ?? null,
+          unit_package: product.unit_package ?? null,
+          tags: product.tags ?? null,
           active: product.active ?? true,
         }),
       }),
@@ -287,15 +400,73 @@ export const api = {
         method: "GET",
         headers: { ...ADMIN_HEADERS },
       }),
-    addSynonyms: (companyId: string, canon: string, variants: string[]) =>
-      jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
-        method: "POST",
-        headers: { ...ADMIN_HEADERS },
-        body: JSON.stringify({
-          company_id: companyId,
-          canon,
-          synonyms: variants,
+      addSynonyms: (companyId: string, canon: string, variants: string[]) =>
+        jsonFetch<SynonymMap>(`/api/admin/synonyms`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
+          body: JSON.stringify({
+            company_id: companyId,
+            canon,
+            synonyms: variants,
+          }),
         }),
-      }),
-  },
-};
+      
+      // NEU: Rebuild Index
+      rebuildIndex: (companyId: string) =>
+        jsonFetch<{ status: string; count: number }>(`/api/admin/index/rebuild`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
+          body: JSON.stringify({
+            company_id: companyId,
+          }),
+        }),
+      
+      // NEU: Refresh Catalog Cache (Hot-Reload ohne Backend-Neustart)
+      refreshCatalog: (companyId: string = "demo") =>
+        jsonFetch<{ status: string; products_loaded: number; indexed_by_name: number; indexed_by_sku: number }>(`/api/admin/catalog/refresh?company_id=${encodeURIComponent(companyId)}`, {
+          method: "POST",
+          headers: { ...ADMIN_HEADERS },
+        }),
+    },
+    
+    // --- Offers (Bibliothek) ---
+    offers: {
+      list: (token: string, status?: string) => {
+        const params = status ? `?status=${encodeURIComponent(status)}` : "";
+        return jsonFetch<OffersListResponse>(`/api/offers${params}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      },
+      
+      get: (token: string, offerId: number) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      
+      create: (token: string, data: CreateOfferData) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(data),
+        }),
+      
+      update: (token: string, offerId: number, data: UpdateOfferData) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(data),
+        }),
+      
+      delete: (token: string, offerId: number) =>
+        jsonFetch<{ success: boolean }>(`/api/offers/${offerId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      
+      duplicate: (token: string, offerId: number) =>
+        jsonFetch<OfferDetailResponse>(`/api/offers/${offerId}/duplicate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+    },
+  };

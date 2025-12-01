@@ -45,6 +45,18 @@ if _HAS_SQLMODEL:
         sku: str = Field(index=True)
         name: str
         description: Optional[str] = None
+        
+        # Pricing & Units
+        price_eur: Optional[float] = Field(default=None)
+        unit: Optional[str] = Field(default=None)  # l, kg, m, m², stk
+        volume_l: Optional[float] = Field(default=None)  # Numeric volume/quantity
+        
+        # Classification
+        category: Optional[str] = Field(default=None, index=True)  # paint, primer, tools, etc.
+        material_type: Optional[str] = Field(default=None)  # dispersion_paint_white, etc.
+        unit_package: Optional[str] = Field(default=None)  # Eimer, Dose, Rolle, etc.
+        tags: Optional[str] = Field(default=None)  # Semicolon-separated tags
+        
         is_active: bool = Field(default=True, index=True)
         updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
@@ -104,6 +116,7 @@ def init_db() -> None:
         SQLModel.metadata.create_all(_get_engine())
         return
     with _sqlite_conn() as conn:
+        # Create products table with all fields
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS products (
@@ -112,13 +125,52 @@ def init_db() -> None:
                 sku TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
+                price_eur REAL,
+                unit TEXT,
+                volume_l REAL,
+                category TEXT,
+                material_type TEXT,
+                unit_package TEXT,
+                tags TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT NOT NULL,
                 UNIQUE(company_id, sku)
             )
             """
         )
+        
+        # Migrate existing table: Add new columns if they don't exist
+        cursor = conn.execute("PRAGMA table_info(products)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        
+        new_columns = {
+            "price_eur": "REAL",
+            "unit": "TEXT",
+            "volume_l": "REAL",
+            "category": "TEXT",
+            "material_type": "TEXT",
+            "unit_package": "TEXT",
+            "tags": "TEXT",
+        }
+        
+        for col_name, col_type in new_columns.items():
+            if col_name not in existing_columns:
+                try:
+                    conn.execute(f"ALTER TABLE products ADD COLUMN {col_name} {col_type}")
+                    print(f"✅ Migration: Added column '{col_name}' to products table")
+                except Exception as e:
+                    print(f"⚠️  Migration warning: Could not add column '{col_name}': {e}")
+        
         conn.execute("CREATE INDEX IF NOT EXISTS idx_products_company ON products(company_id)")
+        
+        # Only create category index if column exists
+        if "category" in existing_columns or "category" in new_columns:
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)")
+            except Exception:
+                pass  # Column might not exist yet in edge cases
+        
+        # Create synonyms table
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS synonyms (
@@ -142,8 +194,35 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
     name = str(product_dict["name"]).strip()
     if not sku or not name:
         raise ValueError("Product 'sku' and 'name' must be non-empty.")
+    
+    # Extract all fields
     description = product_dict.get("description")
     desc_val = str(description) if description is not None else None
+    
+    # Pricing & Units
+    price_eur = product_dict.get("price_eur")
+    price_val = float(price_eur) if price_eur is not None else None
+    
+    unit = product_dict.get("unit")
+    unit_val = str(unit).strip() if unit else None
+    
+    volume_l = product_dict.get("volume_l")
+    volume_val = float(volume_l) if volume_l is not None else None
+    
+    # Classification
+    category = product_dict.get("category")
+    category_val = str(category).strip() if category else None
+    
+    material_type = product_dict.get("material_type")
+    material_type_val = str(material_type).strip() if material_type else None
+    
+    unit_package = product_dict.get("unit_package")
+    unit_package_val = str(unit_package).strip() if unit_package else None
+    
+    tags = product_dict.get("tags")
+    tags_val = str(tags).strip() if tags else None
+    
+    # Active status
     is_active_raw = product_dict.get("is_active")
     if is_active_raw is None and "active" in product_dict:
         is_active_raw = product_dict["active"]
@@ -161,6 +240,13 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
                 session.add(product)
             product.name = name
             product.description = desc_val
+            product.price_eur = price_val
+            product.unit = unit_val
+            product.volume_l = volume_val
+            product.category = category_val
+            product.material_type = material_type_val
+            product.unit_package = unit_package_val
+            product.tags = tags_val
             product.is_active = is_active_val
             if reactivating and hasattr(product, "is_deleted"):
                 setattr(product, "is_deleted", False)
@@ -174,11 +260,28 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
     with _sqlite_conn() as conn:
         conn.execute(
             """
-            INSERT INTO products(company_id, sku, name, description, is_active, updated_at)
-            VALUES (:cid, :sku, :name, :desc, :active, :updated)
+            INSERT INTO products(
+                company_id, sku, name, description, 
+                price_eur, unit, volume_l, 
+                category, material_type, unit_package, tags,
+                is_active, updated_at
+            )
+            VALUES (
+                :cid, :sku, :name, :desc, 
+                :price, :unit, :volume,
+                :category, :material_type, :unit_package, :tags,
+                :active, :updated
+            )
             ON CONFLICT(company_id, sku) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
+                price_eur = excluded.price_eur,
+                unit = excluded.unit,
+                volume_l = excluded.volume_l,
+                category = excluded.category,
+                material_type = excluded.material_type,
+                unit_package = excluded.unit_package,
+                tags = excluded.tags,
                 is_active = excluded.is_active,
                 updated_at = excluded.updated_at
             """,
@@ -187,6 +290,13 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
                 "sku": sku,
                 "name": name,
                 "desc": desc_val,
+                "price": price_val,
+                "unit": unit_val,
+                "volume": volume_val,
+                "category": category_val,
+                "material_type": material_type_val,
+                "unit_package": unit_package_val,
+                "tags": tags_val,
                 "active": 1 if is_active_val else 0,
                 "updated": updated,
             },
@@ -202,7 +312,14 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
             except Exception:
                 pass
         row = conn.execute(
-            "SELECT company_id, sku, name, description, is_active, updated_at FROM products WHERE company_id=? AND sku=?",
+            """
+            SELECT company_id, sku, name, description, 
+                   price_eur, unit, volume_l,
+                   category, material_type, unit_package, tags,
+                   is_active, updated_at 
+            FROM products 
+            WHERE company_id=? AND sku=?
+            """,
             (company_id, sku),
         ).fetchone()
         return _normalize_product_row(dict(row))
@@ -223,7 +340,11 @@ def list_products(
             return [prod.dict(exclude={"id"}) for prod in session.exec(stmt).all()]
     with _sqlite_conn() as conn:
         query = (
-            "SELECT company_id, sku, name, description, is_active, updated_at FROM products WHERE company_id=?"
+            """SELECT company_id, sku, name, description, 
+                      price_eur, unit, volume_l,
+                      category, material_type, unit_package, tags,
+                      is_active, updated_at 
+               FROM products WHERE company_id=?"""
         )
         params = [company_id]
         if not include_deleted:
@@ -243,8 +364,12 @@ def get_active_products(company_id: str) -> List[Dict[str, object]]:
             return [prod.dict(exclude={"id"}) for prod in session.exec(stmt).all()]
     with _sqlite_conn() as conn:
         rows = conn.execute(
-            "SELECT company_id, sku, name, description, is_active, updated_at FROM products "
-            "WHERE company_id=? AND is_active=1",
+            """SELECT company_id, sku, name, description, 
+                      price_eur, unit, volume_l,
+                      category, material_type, unit_package, tags,
+                      is_active, updated_at 
+               FROM products 
+               WHERE company_id=? AND is_active=1""",
             (company_id,),
         ).fetchall()
         return [_normalize_product_row(dict(r)) for r in rows]

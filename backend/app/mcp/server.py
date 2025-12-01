@@ -13,13 +13,13 @@ import logging
 import sys
 from typing import Any, Dict, Optional
 
-from backend.app.mcp.tools import (
+from app.mcp.tools import (
     TOOL_REGISTRY,
     ToolDefinition,
     configure_tools,
     list_tools as registry_list_tools,
 )
-from backend.app.services.quote_service import QuoteServiceContext
+from app.services.quote_service import QuoteServiceContext
 
 logger = logging.getLogger("mcp.server")
 
@@ -36,13 +36,13 @@ def initialize_context(context: Optional[QuoteServiceContext] = None) -> QuoteSe
     global _CONTEXT_INITIALIZED
     if _CONTEXT_INITIALIZED and context is None:
         # Already configured via a previous call.
-        from backend.app.mcp.tools import _CONTEXT as _TOOLS_CONTEXT  # type: ignore
+        from app.mcp.tools import _CONTEXT as _TOOLS_CONTEXT  # type: ignore
 
         if _TOOLS_CONTEXT is not None:
             return _TOOLS_CONTEXT
 
     if context is None:
-        from backend.main import _get_service_context  # type: ignore
+        from main import _get_service_context  # type: ignore
 
         context = _get_service_context()
 

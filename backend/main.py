@@ -16,48 +16,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-# Lokale Module
-try:
-    from app.db import load_products_file, build_vector_db
-    from app.services.quote_service import (
-        QuoteServiceContext,
-        ServiceError,
-        chat_turn,
-        generate_offer_positions,
-        reset_session,
-        render_offer_or_invoice_pdf,
-        get_revenue_guard_materials,
-        run_revenue_guard,
-        save_revenue_guard_materials,
-        search_catalog as service_catalog_search,
-        wizard_finalize,
-        wizard_next_step,
-    )
-except ModuleNotFoundError:  # pragma: no cover - relative fallback for CLI tools
-    from backend.app.db import load_products_file, build_vector_db
-    from backend.app.services.quote_service import (
-        QuoteServiceContext,
-        ServiceError,
-        chat_turn,
-        generate_offer_positions,
-        reset_session,
-        render_offer_or_invoice_pdf,
-        get_revenue_guard_materials,
-        run_revenue_guard,
-        save_revenue_guard_materials,
-        search_catalog as service_catalog_search,
-        wizard_finalize,
-        wizard_next_step,
-    )
+# Setup paths FIRST before any local imports
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
-if str(REPO_ROOT) not in sys.path:  # allow running from backend/ or repo root
-    sys.path.insert(0, str(REPO_ROOT))
 
-from backend.app import admin_api
-from backend.app.services import quote_service as _quote_service_module
-from backend.retriever.thin import search_catalog_thin as _thin_search_catalog
-from backend.store import catalog_store
+# Load .env EARLY (before any local imports that might read env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
+# Add backend dir to path so we can import with 'app.' prefix
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+# Lokale Module
+from app.db import load_products_file, build_vector_db
+from app.pdf import list_offer_templates
+from app.services.quote_service import (
+    QuoteServiceContext,
+    ServiceError,
+    chat_turn,
+    generate_offer_positions,
+    reset_session,
+    render_offer_or_invoice_pdf,
+    get_revenue_guard_materials,
+    run_revenue_guard,
+    save_revenue_guard_materials,
+    search_catalog as service_catalog_search,
+    wizard_finalize,
+    wizard_next_step,
+)
+from app import admin_api
+from app import auth_api
+from app import auth
+from app import offers_api
+from app import speech_api
+from app.services import quote_service as _quote_service_module
+from retriever.thin import search_catalog_thin as _thin_search_catalog
+from store import catalog_store
 
 search_catalog_thin = _thin_search_catalog
 
@@ -68,12 +66,6 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 # ---------- Pfade & ENV ----------
-try:  # bevorzugt lokale .env lesen, auch wenn uvicorn sie nicht lädt
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
-except Exception:
-    pass
-
 DATA_ROOT  = Path(os.getenv("DATA_ROOT", str(BASE_DIR)))
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
@@ -132,7 +124,7 @@ if not SKIP_LLM_SETUP:
     try:
         from app.llm import create_chat_llm, build_chains  # type: ignore
     except ModuleNotFoundError:  # pragma: no cover
-        from backend.app.llm import create_chat_llm, build_chains  # type: ignore
+        from app.llm import create_chat_llm, build_chains  # type: ignore
 else:  # pragma: no cover
     create_chat_llm = build_chains = None  # type: ignore
 
@@ -169,11 +161,60 @@ else:
     else:
         PRODUCT_FILE = DATA_DIR / "bauprodukte_maurerprodukte.txt"
 DOCUMENTS = load_products_file(PRODUCT_FILE, debug=DEBUG)
+
+# LangChain imports - optional for smoke tests without full dependencies
+try:
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.documents import Document as LCDocument
+    from langchain_core.callbacks import CallbackManagerForRetrieverRun
+
+    class IndexManagerRetrieverWrapper(BaseRetriever):
+        """Wrapper to make index_manager compatible with LangChain retriever interface"""
+        company_id: str = "demo"
+        
+        class Config:
+            arbitrary_types_allowed = True
+        
+        def _get_relevant_documents(
+            self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+        ) -> List[LCDocument]:
+            """Retrieve relevant documents from index_manager"""
+            # Ensure index exists
+            index = index_manager.ensure_index(self.company_id)
+            
+            # Search
+            results = index_manager.search(self.company_id, query, top_k=20)
+            
+            # Convert to LangChain Document format
+            docs = []
+            for result in results:
+                doc = LCDocument(
+                    page_content=result.get("text", ""),
+                    metadata={
+                        "sku": result.get("sku", ""),
+                        "name": result.get("name", ""),
+                        "score": result.get("score", 0.0)
+                    }
+                )
+                docs.append(doc)
+            
+            return docs
+
+except ImportError:  # pragma: no cover - smoke tests without langchain
+    IndexManagerRetrieverWrapper = None  # type: ignore[misc, assignment]
+
 if SKIP_LLM_SETUP and not FORCE_RETRIEVER_BUILD:
     DB = None
     RETRIEVER = None
 else:
-    DB, RETRIEVER = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
+    # Old Chroma system (fallback for DOCUMENTS)
+    DB, _ = build_vector_db(DOCUMENTS, CHROMA_DIR, debug=DEBUG)
+    
+    # New index_manager system (for dynamic products)
+    if IndexManagerRetrieverWrapper is not None:
+        RETRIEVER = IndexManagerRetrieverWrapper(company_id="demo")
+    else:
+        RETRIEVER = None  # pragma: no cover
 
 def _sku_from_name(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
@@ -206,7 +247,62 @@ def _document_to_catalog_entry(doc) -> Dict[str, Any]:
     }
     return entry
 
-CATALOG_ITEMS: List[Dict[str, Any]] = [_document_to_catalog_entry(doc) for doc in DOCUMENTS]
+import time
+from functools import lru_cache
+
+_CATALOG_CACHE_TTL = 60  # Sekunden
+_CATALOG_LAST_REFRESH = 0
+_CATALOG_CACHE = []
+
+def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Get catalog items from database (dynamic) + static file (fallback)"""
+    global _CATALOG_LAST_REFRESH, _CATALOG_CACHE
+    
+    # Check if cache is still valid
+    now = time.time()
+    if not force_refresh and _CATALOG_CACHE and (now - _CATALOG_LAST_REFRESH) < _CATALOG_CACHE_TTL:
+        return _CATALOG_CACHE
+    
+    items = []
+    
+    # 1. Load from database (dynamic products)
+    try:
+        from store.catalog_store import get_active_products
+        db_products = get_active_products("demo")
+        for prod in db_products:
+            items.append({
+                "sku": prod.get("sku"),
+                "name": prod.get("name"),
+                "unit": prod.get("unit"),
+                "volume_l": prod.get("volume_l"),
+                "price_eur": prod.get("price_eur"),
+                "pack_sizes": None,
+                "synonyms": [],
+                "category": prod.get("category"),
+                "material_type": prod.get("material_type"),
+                "unit_package": prod.get("unit_package"),
+                "tags": prod.get("tags"),
+                "brand": None,
+                "description": prod.get("description"),
+                "raw": f"{prod.get('name')} - {prod.get('description', '')}",
+            })
+    except Exception as e:
+        import logging
+        logging.warning(f"Could not load database products: {e}")
+    
+    # 2. Add static file products (fallback)
+    for doc in DOCUMENTS:
+        items.append(_document_to_catalog_entry(doc))
+    
+    # Update cache
+    _CATALOG_CACHE = items
+    _CATALOG_LAST_REFRESH = now
+    
+    logger.info(f"📦 Catalog cache refreshed: {len(items)} products loaded")
+    
+    return items
+
+CATALOG_ITEMS: List[Dict[str, Any]] = _get_dynamic_catalog_items()
 CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {
     (item["name"] or "").lower(): item for item in CATALOG_ITEMS if item.get("name")
 }
@@ -225,11 +321,68 @@ SERVICE_CONTEXT: QuoteServiceContext | None = None
 _DB_INITIALIZED = False
 
 
+def refresh_catalog_cache(force: bool = True) -> Dict[str, Any]:
+    """
+    Refresh the catalog cache and update all related dictionaries.
+    Called automatically after admin operations (create/update/delete/rebuild).
+    """
+    global CATALOG_ITEMS, CATALOG_BY_NAME, CATALOG_BY_SKU, CATALOG_TEXT_BY_NAME, CATALOG_TEXT_BY_SKU
+    
+    # Force reload from database
+    catalog_items = _get_dynamic_catalog_items(force_refresh=force)
+    
+    # Update all global dictionaries
+    CATALOG_ITEMS = catalog_items
+    
+    CATALOG_BY_NAME.clear()
+    CATALOG_BY_NAME.update({
+        (item["name"] or "").lower(): item for item in catalog_items if item.get("name")
+    })
+    
+    CATALOG_BY_SKU.clear()
+    CATALOG_BY_SKU.update({
+        item["sku"]: item for item in catalog_items if item.get("sku")
+    })
+    
+    CATALOG_TEXT_BY_NAME.clear()
+    CATALOG_TEXT_BY_NAME.update({
+        (item["name"] or "").lower(): item.get("raw", "") for item in catalog_items if item.get("name")
+    })
+    
+    CATALOG_TEXT_BY_SKU.clear()
+    CATALOG_TEXT_BY_SKU.update({
+        item["sku"]: item.get("raw", "") for item in catalog_items if item.get("sku")
+    })
+    
+    # Clear search cache to force fresh searches
+    CATALOG_SEARCH_CACHE.clear()
+    
+    # Update SERVICE_CONTEXT if it exists
+    if SERVICE_CONTEXT is not None:
+        SERVICE_CONTEXT.catalog_items = CATALOG_ITEMS
+        SERVICE_CONTEXT.catalog_by_name = CATALOG_BY_NAME
+        SERVICE_CONTEXT.catalog_by_sku = CATALOG_BY_SKU
+        SERVICE_CONTEXT.catalog_text_by_name = CATALOG_TEXT_BY_NAME
+        SERVICE_CONTEXT.catalog_text_by_sku = CATALOG_TEXT_BY_SKU
+        SERVICE_CONTEXT.catalog_search_cache = CATALOG_SEARCH_CACHE
+    
+    logger.info(f"✅ Catalog cache refreshed: {len(catalog_items)} products, {len(CATALOG_BY_NAME)} by name, {len(CATALOG_BY_SKU)} by SKU")
+    
+    return {
+        "status": "success",
+        "products_loaded": len(catalog_items),
+        "indexed_by_name": len(CATALOG_BY_NAME),
+        "indexed_by_sku": len(CATALOG_BY_SKU),
+    }
+
+
 def _initialize_database() -> None:
     global _DB_INITIALIZED
     if _DB_INITIALIZED:
         return
     catalog_store.init_db()
+    auth.init_auth_tables()
+    offers_api.init_offers_table()
     _DB_INITIALIZED = True
 
 
@@ -381,6 +534,9 @@ async def _cors_echo_middleware(request, call_next):
 # Statische Auslieferung der generierten PDFs (aus /app/outputs)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
+app.include_router(auth_api.router)
+app.include_router(offers_api.router)
+app.include_router(speech_api.router)
 
 # Root (Health)
 @app.get("/")
@@ -446,6 +602,10 @@ def api_pdf(payload: Dict[str, Any] = Body(...)):
         return render_offer_or_invoice_pdf(payload=payload, ctx=_get_service_context())
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+@app.get("/api/pdf/templates")
+def api_pdf_templates():
+    return {"templates": list_offer_templates()}
 
 @app.get("/api/catalog")
 def api_catalog(limit: int = 50):

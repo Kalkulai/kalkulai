@@ -1,63 +1,115 @@
-# Kalkulai Monorepo
+# KalkulAI
 
-Unified workspace that hosts the FastAPI backend (LLM powered offer builder) and the React/Vite frontend. The repo is optimised for local development, HF Spaces deployment for the backend, and Cloudflare Pages for the frontend.
+Intelligente Angebotserstellung für Handwerker. FastAPI Backend mit LLM-Integration und React/Vite Frontend.
 
-## Repository layout
-- `backend/` – FastAPI application, LangChain integrations, PDF rendering, Space Dockerfile.
-- `frontend/` – React + Vite SPA that talks to the backend via REST.
-- `.github/workflows/` – CI/CD pipelines for Hugging Face Spaces (`backend-deploy-hf.yml`) and Cloudflare Pages (`frontend-deploy-cf.yml`).
+## 📁 Projektstruktur
 
-## Prerequisites
-- Python 3.11+
-- Node.js 20+ (managed via `nvm` recommended)
-- For LLM access: either an OpenAI API key or a locally running Ollama instance.
+```
+kalkulai/
+├── backend/                    # FastAPI Backend
+│   ├── app/                    # Hauptanwendung
+│   │   ├── auth.py            # Authentifizierung (User, JWT)
+│   │   ├── auth_api.py        # Auth API Endpoints
+│   │   ├── admin_api.py       # Admin API (Produktverwaltung)
+│   │   ├── llm.py             # LLM Integration
+│   │   ├── pdf.py             # PDF-Generierung
+│   │   └── services/          # Business Logic
+│   ├── data/                   # Produktdaten
+│   ├── retriever/              # Vektor-Suche
+│   ├── store/                  # Datenbank-Layer
+│   ├── templates/              # PDF-Templates
+│   ├── var/                    # Datenbank (kalkulai.db)
+│   ├── main.py                 # FastAPI App
+│   └── requirements.txt
+│
+├── frontend/                   # React/Vite Frontend
+│   ├── src/
+│   │   ├── components/        # UI Komponenten
+│   │   ├── contexts/          # React Context (Auth)
+│   │   ├── pages/             # Seiten (Login, Index)
+│   │   └── lib/               # API Client, Utilities
+│   └── package.json
+│
+└── docs/                       # Dokumentation
+```
 
-## Backend setup
+## 🚀 Schnellstart
+
+### Backend
+
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # adjust values as needed
-uvicorn main:app --reload
+
+# Umgebungsvariablen setzen
+export OPENAI_API_KEY="sk-..."
+
+# Server starten
+python main.py
 ```
 
-Key environment variables (see `backend/.env.example` for the full list):
-- `MODEL_PROVIDER` – `openai` 
-- `OPENAI_API_KEY`  – credentials or local base URL.
-- `FRONTEND_ORIGINS` – comma separated list of allowed origins for CORS (include your Cloudflare Pages domain and `http://localhost:8080` for local Vite dev).
-- `SKIP_LLM_SETUP` – set to `1` to boot the API without hitting LLM providers (handy for smoke tests).
+Backend läuft auf `http://localhost:7860`
 
-Generated assets:
-- Vector store is written to `backend/chroma_db/` by default.
-- Generated PDFs land in `backend/outputs/` and are served via `/outputs/...`.
+### Frontend
 
-## Frontend setup
 ```bash
 cd frontend
-npm ci
-cp .env.example .env.local  # for production builds set VITE_API_BASE to your backend URL
+npm install
 npm run dev
 ```
 
-`npm run dev` starts Vite on port 8080. During development the dev server proxies REST requests (`/api`, `/wizard`, `/revenue-guard`, `/outputs`) to `http://localhost:8000`, so you do not need to set `VITE_API_BASE` for local work. For staging/production builds point `VITE_API_BASE` to the deployed backend origin (omit trailing slash). You can override the proxy target, if required, via `VITE_DEV_BACKEND_ORIGIN`.
+Frontend läuft auf `http://localhost:5173`
 
-## Testing & linting
-- Backend: `python -m venv .venv && source .venv/bin/activate` then `pip install -r backend/requirements-dev.txt` and run `pytest backend/testing`.
-- Frontend: `npm run test` (Vitest) and `npm run lint`.
+## 🔐 Login
 
-## Deployment pipelines
-1. **Hugging Face Space (backend)** – pushes to `main` touching `backend/**` or the workflow file trigger the Space upload via `backend-deploy-hf.yml`. Requires `HF_TOKEN` and `HF_SPACE_ID` repository secrets.
-2. **Cloudflare Pages (frontend)** – PR validation runs build CI; pushes to `main` deploy using `frontend-deploy-cf.yml`. Requires `CF_API_TOKEN`, `CF_ACCOUNT_ID`, and `CF_PROJECT_NAME` secrets.
-3. **Smoke Tests** – `smoke-tests.yml` runs backend pytest smoke checks and the frontend build/test on every PR and on pushes to `main`.
-4. **Main branch guard** – `block-direct-main.yml` rewinds `main` to the previous commit when someone pushes directly (außer PR-Merges/Bots) und markiert den Workflow als fehlgeschlagen. Direkte Pushes gehen dadurch sofort verloren – nutzt bitte PRs.
+Nach dem Start wird automatisch ein Demo-User erstellt:
 
-## Local-development tips
-- When running both services locally, start the backend first so the frontend can reach it at `http://localhost:8000`.
-- To avoid LLM costs while iterating on the UI, run the backend with `SKIP_LLM_SETUP=1`. Only the health/reset endpoints stay live in that mode.
-- The backend exposes a `/api/session/reset` endpoint that the frontend calls on mount to clear conversation state.
+- **E-Mail:** `admin@kalkulai.de`
+- **Passwort:** `kalkulai2024`
 
-## Next steps
-- Add automated tests for critical backend flows (chat to offer, PDF generation).
-- Introduce a shared `.env` loader or configuration module to keep environment management DRY.
-- Expand documentation around the dataset files in `backend/data/` and how they are updated.
+## ⚙️ Umgebungsvariablen
+
+### Backend (.env)
+
+| Variable | Beschreibung | Default |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | OpenAI API Key | - |
+| `MODEL_PROVIDER` | LLM Provider (openai/ollama) | `openai` |
+| `MODEL_LLM1` | Chat-Modell | `gpt-4o-mini` |
+| `MODEL_LLM2` | Angebots-Modell | `gpt-4o-mini` |
+| `VAT_RATE` | Mehrwertsteuersatz | `0.19` |
+| `DEBUG` | Debug-Modus | `0` |
+
+### Frontend (.env)
+
+| Variable | Beschreibung | Default |
+|----------|-------------|---------|
+| `VITE_API_BASE` | Backend URL | `http://localhost:7860` |
+
+## 📋 Features
+
+- **Chat-basierte Angebotserstellung** - Beschreibe dein Projekt, KalkulAI erstellt das Angebot
+- **Wizard-Modus** - Geführte Eingabe für Maler-Projekte
+- **Angebots-Editor** - Positionen manuell anpassen vor PDF-Export
+- **Revenue Guard** - Vergessene Materialien automatisch vorschlagen
+- **Produktdatenbank** - Eigene Produkte verwalten (CSV-Import)
+- **Benutzerverwaltung** - Login, Passwort/E-Mail ändern
+
+## 🧪 Tests
+
+```bash
+# Backend Tests
+cd backend
+pip install -r requirements-dev.txt
+pytest testing/
+
+# Frontend Tests
+cd frontend
+npm run test
+```
+
+## 📄 Lizenz
+
+Proprietär - Alle Rechte vorbehalten.

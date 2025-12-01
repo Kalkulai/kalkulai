@@ -266,7 +266,73 @@ def test_generate_offer_positions_uses_llm2_and_catalog(tmp_path):
 
     assert result["positions"][0]["name"] == "Premiumfarbe weiß 10L"
     assert result["positions"][0]["gesamtpreis"] == 50
-    assert result["raw"] == llm_response
+    assert json.loads(result["raw"]) == result["positions"]
+
+
+def test_generate_offer_positions_adjusts_price_for_pack_conversion(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Premiumfarbe weiß 10L", "menge": 1, '
+        '"einheit": "Eimer", "epreis": 29.9, "gesamtpreis": 29.9}]'
+    )
+    memory = FakeMemory("Assistent:\n---\nstatus: bestätigt\nmaterialien:\n- name=Premiumfarbe weiß 10L, menge=1, einheit=Eimer\n---")
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=memory,
+        retriever=None,
+    )
+    payload = {"products": ["Premiumfarbe weiß 10L"]}
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    pos = result["positions"][0]
+    assert pos["einheit"] == "L"
+    assert pos["menge"] == 10
+    assert pytest.approx(pos["epreis"], rel=1e-6) == 2.99
+    assert pytest.approx(pos["gesamtpreis"], rel=1e-6) == 29.9
+    assert json.loads(result["raw"]) == result["positions"]
+
+
+def test_generate_offer_positions_adjusts_price_for_roll_conversion(tmp_path):
+    llm_response = (
+        '[{"nr": 1, "name": "Kreppband 50 m", "menge": 1, '
+        '"einheit": "Rolle", "epreis": 2.9, "gesamtpreis": 2.9}]'
+    )
+    tape_entry = {
+        "sku": "sku-band-50",
+        "name": "Kreppband 50 m",
+        "unit": "m",
+        "pack_sizes": ["50 m"],
+        "synonyms": ["Abklebeband"],
+        "category": "Zubehör",
+        "brand": "Test",
+        "description": "Klebeband",
+        "raw": "Produkt: Kreppband 50 m",
+    }
+    ctx = make_context(
+        tmp_path,
+        llm2=FakeLLM(llm_response),
+        prompt2="CTX:{context}\nQ:{question}",
+        memory1=FakeMemory(),
+        retriever=None,
+        catalog_entry=tape_entry,
+        catalog_items=[tape_entry],
+        catalog_by_name={tape_entry["name"].lower(): tape_entry},
+        catalog_by_sku={tape_entry["sku"]: tape_entry},
+        catalog_text_by_name={tape_entry["name"].lower(): tape_entry["raw"]},
+        catalog_text_by_sku={tape_entry["sku"]: tape_entry["raw"]},
+    )
+    payload = {"products": ["Kreppband 50 m"]}
+
+    result = generate_offer_positions(payload=payload, ctx=ctx, company_id=None)
+
+    pos = result["positions"][0]
+    assert pos["einheit"] == "m"
+    assert pos["menge"] == 50
+    assert pytest.approx(pos["epreis"], rel=1e-6) == 2.9 / 50
+    assert pytest.approx(pos["gesamtpreis"], rel=1e-6) == 2.9
+    assert json.loads(result["raw"]) == result["positions"]
 
 
 def test_generate_offer_positions_without_context_raises(tmp_path):
@@ -395,11 +461,16 @@ def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
     saved_path = tmp_path / "outputs" / "angebot.pdf"
     saved_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def fake_render(env, context, output_dir):  # pragma: no cover - patched
+    def fake_render(env, template_file, context, output_dir):  # pragma: no cover - patched
+        assert template_file.endswith(".html")
         saved_path.write_text("pdf")
         return saved_path
 
-    fake_module = SimpleNamespace(render_pdf_from_template=fake_render)
+    fake_module = SimpleNamespace(
+        render_pdf_from_template=fake_render,
+        DEFAULT_OFFER_TEMPLATE_ID="classic",
+        resolve_offer_template=lambda tpl_id: {"id": "classic", "file": "offer.html"},
+    )
     monkeypatch.setitem(sys.modules, "backend.app.pdf", fake_module)
     ctx = make_context(tmp_path)
     payload = {
@@ -411,6 +482,7 @@ def test_render_offer_or_invoice_pdf(monkeypatch, tmp_path):
 
     assert result["pdf_url"].endswith("angebot.pdf")
     assert result["context"]["brutto_summe"] == 11.9  # 19 % VAT
+    assert result["template_id"] == "classic"
 
 
 def test_wizard_flow_produces_suggestions(tmp_path):

@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Mic, MicOff, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -16,11 +18,18 @@ import remarkGfm from "remark-gfm";
 import WizardMaler, { WizardFinalizeResult } from "@/components/WizardMaler";
 import DatabaseManager from "@/components/DatabaseManager";
 import GuardMaterialsEditor from "@/components/GuardMaterialsEditor";
+import OfferEditor, { OfferPosition } from "@/components/OfferEditor";
+import OfferLibrary from "@/components/OfferLibrary";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 import type {
   RevenueGuardResponse,
   RevenueGuardSuggestion,
   WizardStepResponse,
+  Offer,
+  OfferTemplateOption,
 } from "@/lib/api";
 
 // ---- Einheitliche Kartenhöhe (hier zentral ändern) ----
@@ -47,7 +56,61 @@ type UiSection = {
 // ---- Eingabe-Historie (links) ----
 type InputEntry = { id: string; text: string; ts: number };
 
-const KalkulaiInterface = () => {
+interface KalkulaiInterfaceProps {
+  embedded?: boolean;
+}
+
+const coerceNumber = (value: number | string | null | undefined): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const normalizePositions = (items: OfferPosition[]): OfferPosition[] =>
+  items.map((p, idx) => {
+    const nr = Number.isFinite(p.nr) ? p.nr : idx + 1;
+    const menge = coerceNumber(p.menge);
+    const epreis = coerceNumber(p.epreis);
+    const gesamtpreis =
+      typeof p.gesamtpreis === "number" && Number.isFinite(p.gesamtpreis)
+        ? Math.round(p.gesamtpreis * 100) / 100
+        : Math.round(menge * epreis * 100) / 100;
+    return {
+      ...p,
+      nr,
+      menge,
+      epreis,
+      gesamtpreis,
+    };
+  });
+
+const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
+  const { user, token, logout, changePassword, changeEmail, updateProfile } = useAuth();
+  
+  // Voice Input
+  const {
+    isListening,
+    interimTranscript,
+    startListening,
+    stopListening,
+    isEnabled: isVoiceEnabled,
+    isChecking: isVoiceChecking,
+    error: voiceError,
+    clearTranscript: clearVoiceTranscript,
+  } = useVoiceInput({
+    language: "de-DE",
+    onTranscript: (text) => {
+      // Append final transcript to input
+      setInputText((prev) => prev ? `${prev} ${text}` : text);
+    },
+    silenceTimeout: 3000, // Stop after 3s of silence
+  });
+
   const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
@@ -58,6 +121,59 @@ const KalkulaiInterface = () => {
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isMakingPdf, setIsMakingPdf] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [offerTemplates, setOfferTemplates] = useState<OfferTemplateOption[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const templateStorageKey = useMemo(
+    () => (user?.id ? `kalkulai_offer_template_${user.id}` : "kalkulai_offer_template_guest"),
+    [user?.id],
+  );
+  const handleTemplateSelect = useCallback(
+    (templateId: string) => {
+      setSelectedTemplateId(templateId);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(templateStorageKey, templateId);
+      }
+    },
+    [templateStorageKey],
+  );
+  const activeTemplate = useMemo(() => {
+    if (!offerTemplates.length) {
+      return selectedTemplateId ? { id: selectedTemplateId, label: selectedTemplateId, tagline: "", description: "", accent: "#0f172a", background: "#f4f4f5" } : null;
+    }
+    if (selectedTemplateId) {
+      return offerTemplates.find((tpl) => tpl.id === selectedTemplateId) ?? null;
+    }
+    return offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0] ?? null;
+  }, [offerTemplates, selectedTemplateId]);
+  
+  // Profile/Account state
+  const [profileName, setProfileName] = useState(user?.name || "");
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Email change state
+  const [newEmail, setNewEmail] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
+  const [isChangingEmail, setIsChangingEmail] = useState(false);
+  const [emailMessage, setEmailMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
+  // Current offer being edited (from library)
+  const [currentOffer, setCurrentOffer] = useState<Offer | null>(null);
+  const [offerTitle, setOfferTitle] = useState("");
+  const [offerKunde, setOfferKunde] = useState("");
+  const [isSavingOffer, setIsSavingOffer] = useState(false);
 
   // Angebotspositionen (final-relevant: PDF, Preise)
   const [positions, setPositions] = useState<
@@ -70,21 +186,6 @@ const KalkulaiInterface = () => {
   // Revenue Guard + Wizard-Kontext
   const [guard, setGuard] = useState<RevenueGuardResponse | null>(null);
   const [wizardCtx, setWizardCtx] = useState<any>(null);
-
-  const profileCategories = [
-    {
-      title: "Persönliche Daten",
-      description: "Kontaktdaten, Unternehmenszuordnung und Rechnungsanschrift pflegen.",
-    },
-    {
-      title: "Team & Rollen",
-      description: "Kolleg:innen einladen und Verantwortlichkeiten im Projekt festlegen.",
-    },
-    {
-      title: "Zugangsdaten",
-      description: "E-Mail, Passwort und Zwei-Faktor-Authentifizierung verwalten.",
-    },
-  ];
 
   const settingsCategories = [
     {
@@ -121,34 +222,126 @@ const KalkulaiInterface = () => {
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [inputText]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedTemplate = window.localStorage.getItem(templateStorageKey);
+    if (storedTemplate) {
+      setSelectedTemplateId(storedTemplate);
+    }
+  }, [templateStorageKey]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingTemplates(true);
+    api
+      .pdfTemplates()
+      .then((res) => {
+        if (!isMounted) return;
+        setOfferTemplates(res.templates || []);
+        setTemplateError(null);
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setTemplateError(err?.message || "Layouts konnten nicht geladen werden.");
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingTemplates(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!offerTemplates.length) return;
+    if (selectedTemplateId) {
+      const exists = offerTemplates.some((tpl) => tpl.id === selectedTemplateId);
+      if (!exists) {
+        const fallback = offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0];
+        if (fallback) {
+          handleTemplateSelect(fallback.id);
+        }
+      }
+      return;
+    }
+    const fallback = offerTemplates.find((tpl) => tpl.is_default) ?? offerTemplates[0];
+    if (fallback) {
+      handleTemplateSelect(fallback.id);
+    }
+  }, [offerTemplates, selectedTemplateId, handleTemplateSelect]);
+
+  type ResetOptions = {
+    keepOffer?: boolean;
+  };
+
+  const resetUiState = useCallback((options?: ResetOptions) => {
+    setPositions([]);
+    setSections([]);
+    setInputs([]);
+    setInputText("");
+    setGuard(null);
+    setWizardCtx(null);
+    setIsEditing(false);
+    setLeftMode("chat");
+
+    if (!options?.keepOffer) {
+      setCurrentOffer(null);
+      setOfferTitle("");
+      setOfferKunde("");
+    }
+  }, []);
+
   // ---- Backend-Reset beim Mount + lokaler Reset ----
   useEffect(() => {
     (async () => {
+      let errorMessage: string | null = null;
       try {
         await api.reset(); // leert Chat-Memory & Wizard-Sessions im Backend
-      } catch (e) {
-        // optional: System-Hinweis rechts anzeigen
-        setSections((prev) => [
-          ...prev,
-          {
-            id: String(Date.now() + Math.random()),
-            ts: Date.now(),
-            title: "Hinweis",
-            subtitle: "Server-Reset",
-            description: "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.",
-            source: "system",
-          },
-        ]);
+      } catch (e: any) {
+        errorMessage = String(e?.message ?? "Konnte den Server-Reset nicht ausführen. Bitte Seite neu laden oder später erneut versuchen.");
       } finally {
-        // lokalen Zustand auch leeren
-        setPositions([]);
-        setSections([]);
-        setGuard(null);
-        setInputs([]);
-        setInputText("");
+        resetUiState();
+        if (errorMessage) {
+          setSections([
+            mkSection({
+              title: "Hinweis",
+              subtitle: "Server-Reset",
+              description: errorMessage,
+              source: "system",
+            }),
+          ]);
+        }
       }
     })();
-  }, []);
+  }, [resetUiState]);
+
+  const handleResetWorkspace = async () => {
+    if (isResetting) return;
+    setIsResetting(true);
+
+    let errorMessage: string | null = null;
+    try {
+      await api.reset();
+    } catch (error: any) {
+      errorMessage = String(error?.message ?? "Unbekannter Fehler beim Reset");
+    } finally {
+      resetUiState();
+      setIsResetting(false);
+
+      setSections([
+        mkSection({
+          title: errorMessage ? "Hinweis" : "Neu gestartet",
+          subtitle: errorMessage ? "Server-Reset fehlgeschlagen" : "Bereit für neue Eingaben",
+          description: errorMessage
+            ? `${errorMessage}. Bitte Seite neu laden oder später erneut probieren.`
+            : "Alle Eingaben wurden zurückgesetzt. Du kannst jetzt von vorne beginnen.",
+          source: "system",
+        }),
+      ]);
+    }
+  };
 
   useEffect(() => {
     if (isSettingsDialogOpen) {
@@ -202,7 +395,7 @@ const KalkulaiInterface = () => {
         try {
           const offer = await api.offerFromChat();
           if (offer?.positions?.length) {
-            setPositions(offer.positions);
+            setPositions(normalizePositions(offer.positions));
             setSections((prev) => [
               ...prev,
               mkSection({
@@ -277,6 +470,7 @@ const KalkulaiInterface = () => {
       const res = await api.pdf({
         positions,
         kunde: "Bau GmbH\nHauptstraße 1\n12345 Stadt",
+        template_id: selectedTemplateId ?? undefined,
       });
 
       const base = api.base();
@@ -396,7 +590,7 @@ const KalkulaiInterface = () => {
       ]);
     }
 
-    setPositions(mappedPositions);
+    setPositions(normalizePositions(mappedPositions));
 
     setSections((prev) => {
       const withoutLive = prev.filter((s) => !(s.source === "wizard" && s.title === "Live-Vorschau"));
@@ -447,17 +641,22 @@ const KalkulaiInterface = () => {
       /* noop */
     }
 
-    const newPos =
-      mapped ??
-      ({
-        nr: positions.length + 1,
+    // Berechne die korrekte nächste Positionsnummer
+    const nextNr = positions.length > 0 
+      ? Math.max(...positions.map(p => p.nr)) + 1 
+      : 1;
+
+    const newPos = {
+      ...(mapped ?? {
         name: sug.name,
         menge: Number(sug.menge) || 0,
         einheit: sug.einheit || "",
         epreis: 0,
-      } as const);
+      }),
+      nr: nextNr,  // Immer die korrekte fortlaufende Nummer setzen
+    };
 
-    setPositions((prev) => [...prev, newPos]);
+    setPositions((prev) => normalizePositions([...prev, newPos]));
     // Nach Hinzufügen direkt erneut prüfen
     await runRevenueGuard();
   }
@@ -465,113 +664,326 @@ const KalkulaiInterface = () => {
   const chatSection = sections.find((s) => s.source === "chat");
   const supportingSections = sections.filter((s) => s.source !== "chat");
 
+  // Editor handlers
+  const handleStartEditing = () => {
+    if (positions.length > 0) {
+      setIsEditing(true);
+    }
+  };
+
+  const handleSaveEdits = (updatedPositions: OfferPosition[]) => {
+    setPositions(normalizePositions(updatedPositions));
+    setIsEditing(false);
+    setSections((prev) => [
+      ...prev,
+      mkSection({
+        title: "Angebot aktualisiert",
+        subtitle: "Änderungen übernommen",
+        description: `Das Angebot enthält jetzt **${updatedPositions.length} Positionen**. Du kannst nun das PDF erstellen.`,
+        source: "system",
+      }),
+    ]);
+  };
+
+  const handleCancelEditing = () => {
+    setIsEditing(false);
+  };
+
+  // --- Bibliothek Funktionen ---
+  const handleEditOfferFromLibrary = (offer: Offer) => {
+    setCurrentOffer(offer);
+    setOfferTitle(offer.title);
+    setOfferKunde(offer.kunde || "");
+    setPositions(normalizePositions(offer.positions));
+    setActiveNav("erstellen");
+    setSections([
+      mkSection({
+        title: "Angebot geladen",
+        subtitle: offer.title,
+        description: `Das Angebot wurde aus der Bibliothek geladen. Du kannst es jetzt bearbeiten oder über den Chat anpassen.`,
+        source: "system",
+      }),
+    ]);
+  };
+
+  const handleNewOffer = () => {
+    resetUiState();
+    setActiveNav("erstellen");
+  };
+
+  const handleSaveOffer = async () => {
+    if (!token || positions.length === 0) return;
+    
+    const title = offerTitle.trim() || `Angebot vom ${new Date().toLocaleDateString("de-DE")}`;
+    
+    setIsSavingOffer(true);
+    try {
+      if (currentOffer) {
+        // Update existing offer
+        const response = await api.offers.update(token, currentOffer.id, {
+          title,
+          kunde: offerKunde || undefined,
+          positions,
+        });
+        setCurrentOffer(response.offer);
+        setSections((prev) => [
+          ...prev,
+          mkSection({
+            title: "Angebot gespeichert",
+            subtitle: title,
+            description: "Änderungen wurden in der Bibliothek gespeichert.",
+            source: "system",
+          }),
+        ]);
+      } else {
+        // Create new offer
+        const response = await api.offers.create(token, {
+          title,
+          kunde: offerKunde || undefined,
+          positions,
+        });
+        setCurrentOffer(response.offer);
+        setSections((prev) => [
+          ...prev,
+          mkSection({
+            title: "Angebot gespeichert",
+            subtitle: title,
+            description: "Das Angebot wurde in der Bibliothek gespeichert.",
+            source: "system",
+          }),
+        ]);
+      }
+    } catch (err: any) {
+      setSections((prev) => [
+        ...prev,
+        mkSection({
+          title: "Fehler",
+          subtitle: "Speichern fehlgeschlagen",
+          description: err.message || "Unbekannter Fehler beim Speichern",
+          source: "system",
+        }),
+      ]);
+    } finally {
+      setIsSavingOffer(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
-        <div className="max-w-[1440px] mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <img
-                src="/lovable-uploads/c512bb54-21ad-4d03-a77e-daa5f6a25264.png"
-                alt="KalkulAI Logo"
-                className="h-16 w-auto"
-              />
-            </div>
-            <div className="flex items-center gap-8">
+    <div className={embedded ? "" : "min-h-screen bg-background"}>
+      {/* Embedded Header - kompakt für eingebetteten Modus */}
+      {embedded ? (
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Angebote & Rechnungen</h1>
+            <p className="text-slate-500 mt-1">Erstelle und verwalte deine Dokumente</p>
+          </div>
+          <div className="flex items-center gap-4">
+            {/* Navigation Tabs */}
+            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
               <button
                 onClick={() => setActiveNav("erstellen")}
-                className={`text-sm font-medium transition-colors ${
-                  activeNav === "erstellen" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeNav === "erstellen" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Erstellen
               </button>
               <button
                 onClick={() => setActiveNav("bibliothek")}
-                className={`text-sm font-medium transition-colors ${
-                  activeNav === "bibliothek" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  activeNav === "bibliothek" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Bibliothek
               </button>
-
-              {/* Chat <-> Wizard Umschalter */}
-              <div className="ml-6 flex items-center gap-2">
+            </div>
+            
+            {/* Mode Toggle (Chat/Wizard) */}
+            {activeNav === "erstellen" && (
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
                 <button
                   onClick={() => setLeftMode("chat")}
-                  className={`text-sm px-3 py-1 rounded-full ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     leftMode === "chat"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      ? "bg-primary text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
                   Chat
                 </button>
                 <button
                   onClick={() => setLeftMode("wizard")}
-                  className={`text-sm px-3 py-1 rounded-full ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     leftMode === "wizard"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      ? "bg-primary text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
                   Wizard
                 </button>
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-                  >
-                    <UserCircle className="h-5 w-5" />
-                    <span className="hidden sm:inline">Profil</span>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem
-                    onSelect={() => setIsProfileDialogOpen(true)}
-                  >
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Mein Profil</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => setIsSettingsDialogOpen(true)}
-                  >
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Einstellungen</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
+            )}
 
-          {/* Tab Toggle */}
-          <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={() => setActiveTab("angebot")}
-              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
-                activeTab === "angebot" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
-            >
-              Angebot
-            </button>
-            <button
-              onClick={() => setActiveTab("rechnung")}
-              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
-                activeTab === "rechnung" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
-            >
-              Rechnung
-            </button>
+            {/* Type Toggle (Angebot/Rechnung) */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+              <button
+                onClick={() => setActiveTab("angebot")}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "angebot" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Angebot
+              </button>
+              <button
+                onClick={() => setActiveTab("rechnung")}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  activeTab === "rechnung" 
+                    ? "bg-white shadow-sm text-slate-900" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Rechnung
+              </button>
+            </div>
+
           </div>
         </div>
-      </header>
+      ) : (
+        /* Original Header für Standalone-Modus */
+        <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
+          <div className="max-w-[1440px] mx-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/lovable-uploads/c512bb54-21ad-4d03-a77e-daa5f6a25264.png"
+                  alt="KalkulAI Logo"
+                  className="h-16 w-auto"
+                />
+              </div>
+              <div className="flex items-center gap-8">
+                <button
+                  onClick={() => setActiveNav("erstellen")}
+                  className={`text-sm font-medium transition-colors ${
+                    activeNav === "erstellen" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Erstellen
+                </button>
+                <button
+                  onClick={() => setActiveNav("bibliothek")}
+                  className={`text-sm font-medium transition-colors ${
+                    activeNav === "bibliothek" ? "text-foreground font-bold" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Bibliothek
+                </button>
+
+                {/* Chat <-> Wizard Umschalter */}
+                <div className="ml-6 flex items-center gap-2">
+                  <button
+                    onClick={() => setLeftMode("chat")}
+                    className={`text-sm px-3 py-1 rounded-full ${
+                      leftMode === "chat"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => setLeftMode("wizard")}
+                    className={`text-sm px-3 py-1 rounded-full ${
+                      leftMode === "wizard"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    Wizard
+                  </button>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <span className="text-sm font-semibold text-primary">
+                          {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <span className="hidden sm:inline max-w-[120px] truncate">
+                        {user?.name || user?.email || "Profil"}
+                      </span>
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <div className="px-3 py-2 border-b border-border">
+                      <p className="text-sm font-medium truncate">{user?.name || "Benutzer"}</p>
+                      <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                    </div>
+                    <DropdownMenuItem
+                      onSelect={() => setIsProfileDialogOpen(true)}
+                      className="mt-1"
+                    >
+                      <User className="mr-2 h-4 w-4" />
+                      <span>Mein Profil</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={logout}
+                      className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                    >
+                      <LogOut className="mr-2 h-4 w-4" />
+                      <span>Abmelden</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            {/* Tab Toggle */}
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => setActiveTab("angebot")}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                  activeTab === "angebot" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                Angebot
+              </button>
+              <button
+                onClick={() => setActiveTab("rechnung")}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                  activeTab === "rechnung" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                Rechnung
+              </button>
+            </div>
+          </div>
+        </header>
+      )}
 
       {/* Main */}
-      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className={embedded ? "" : "max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6"}>
+        {activeNav === "bibliothek" ? (
+          /* Bibliothek View */
+          <Card className="p-6 lg:p-8 min-h-[70vh] shadow-soft border border-border">
+            <OfferLibrary 
+              onEditOffer={handleEditOfferFromLibrary}
+              onNewOffer={handleNewOffer}
+            />
+          </Card>
+        ) : (
+          /* Erstellen View */
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left */}
           <div className="space-y-4">
@@ -611,22 +1023,88 @@ const KalkulaiInterface = () => {
                       className="w-full min-h-[44px] resize-none border-none outline-none text-base leading-6 placeholder:text-muted-foreground bg-transparent p-0"
                       rows={1}
                     />
-                    <div className="flex items-center justify-between pt-2">
+                    {/* Voice interim transcript preview */}
+                    {(isListening || interimTranscript) && (
+                      <div className="mb-2 px-3 py-2 bg-primary/10 rounded-lg border border-primary/20">
+                        <div className="flex items-center gap-2">
+                          <div className="relative">
+                            <Mic className="w-4 h-4 text-primary" />
+                            {isListening && (
+                              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                            )}
+                          </div>
+                          <span className="text-sm text-primary/80 italic">
+                            {interimTranscript || "Höre zu..."}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Voice error message */}
+                    {voiceError && (
+                      <div className="mb-2 px-3 py-2 bg-destructive/10 rounded-lg border border-destructive/20">
+                        <span className="text-sm text-destructive">{voiceError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
                       <div className="flex items-center gap-1.5">
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <MessageSquare className="w-4 h-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8">
-                          <Mic className="w-4 h-4" />
+                        <Button 
+                          size="icon" 
+                          variant={isListening ? "default" : "ghost"}
+                          className={`h-8 w-8 transition-all ${isListening ? "bg-red-500 hover:bg-red-600 text-white" : ""}`}
+                          onClick={() => {
+                            if (isListening) {
+                              stopListening();
+                            } else {
+                              clearVoiceTranscript();
+                              startListening();
+                            }
+                          }}
+                          disabled={isVoiceChecking || !isVoiceEnabled}
+                          title={
+                            isVoiceChecking 
+                              ? "Prüfe Spracherkennung..." 
+                              : !isVoiceEnabled 
+                                ? "Spracherkennung nicht verfügbar" 
+                                : isListening 
+                                  ? "Aufnahme stoppen" 
+                                  : "Spracheingabe starten"
+                          }
+                        >
+                          {isListening ? (
+                            <MicOff className="w-4 h-4" />
+                          ) : (
+                            <Mic className={`w-4 h-4 ${!isVoiceEnabled && !isVoiceChecking ? "opacity-50" : ""}`} />
+                          )}
                         </Button>
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <Camera className="w-4 h-4" />
                         </Button>
                       </div>
-                      <Button onClick={handleSend} disabled={isLoading || !inputText.trim()} className="h-9 px-3 rounded-full">
-                        <ArrowUp className="w-4 h-4 mr-1" />
-                        Senden
-                      </Button>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="px-3 text-sm text-muted-foreground hover:text-foreground"
+                          onClick={handleResetWorkspace}
+                          disabled={isResetting}
+                        >
+                          {isResetting ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <RotateCcw className="w-4 h-4 mr-2" />
+                          )}
+                          Neu anfangen
+                        </Button>
+                        <Button onClick={handleSend} disabled={isLoading || !inputText.trim()} className="h-9 px-3 rounded-full">
+                          <ArrowUp className="w-4 h-4 mr-1" />
+                          Senden
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </>
@@ -641,21 +1119,36 @@ const KalkulaiInterface = () => {
           {/* Right */}
           <div className="space-y-4">
             <Card className={`p-7 lg:p-9 ${CARD_HEIGHT} shadow-soft border border-border flex flex-col`}>
+              {isEditing ? (
+                /* Editor Mode */
+                <OfferEditor
+                  positions={positions}
+                  onSave={handleSaveEdits}
+                  onCancel={handleCancelEditing}
+                />
+              ) : (
+                <>
               {/* Kopf */}
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-bold text-foreground mb-1">Ergebnis</h2>
                   <p className="text-base text-muted-foreground">Aktuelle Auswertung</p>
                 </div>
-                <Button
-                  variant="outline"
-                  disabled={isMakingPdf || positions.length === 0}
-                  onClick={handleMakePdf}
-                  title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  {isMakingPdf ? "PDF…" : "PDF erstellen"}
-                </Button>
+                <div className="text-right">
+                  <Button
+                    variant="outline"
+                    disabled={isMakingPdf || positions.length === 0}
+                    onClick={handleMakePdf}
+                    title={positions.length === 0 ? "Keine Positionen vorhanden" : "PDF erstellen"}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    {isMakingPdf ? "PDF…" : "PDF erstellen"}
+                  </Button>
+                  <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                    <Palette className="h-3.5 w-3.5" />
+                    <span>{activeTemplate ? `${activeTemplate.label} Layout` : "Standard Layout"}</span>
+                  </div>
+                </div>
               </div>
 
               {/* Scrollbarer Content-Bereich */}
@@ -667,8 +1160,38 @@ const KalkulaiInterface = () => {
                       <p className="text-muted-foreground">Analysiere Eingabe…</p>
                     </div>
                   </div>
-                ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) ? (
+                    ) : chatSection || supportingSections.length > 0 || (guard && guard.missing.length > 0) || positions.length > 0 ? (
                   <div className="space-y-6">
+                        {/* Positions Preview */}
+                        {positions.length > 0 && (
+                          <div className="mb-4 border border-border rounded-lg overflow-hidden">
+                            <div className="bg-muted/50 px-4 py-2 border-b border-border">
+                              <h3 className="font-semibold text-foreground text-sm">
+                                Angebotspositionen ({positions.length})
+                              </h3>
+                            </div>
+                            <div className="divide-y divide-border max-h-[200px] overflow-y-auto">
+                              {positions.map((p, idx) => (
+                                <div key={`${p.nr}-${idx}`} className="px-4 py-2 flex justify-between items-center text-sm">
+                                  <div className="flex-1">
+                                    <span className="text-muted-foreground mr-2">{p.nr}.</span>
+                                    <span className="font-medium">{p.name}</span>
+                                  </div>
+                                  <div className="text-right text-muted-foreground">
+                                    {p.menge} {p.einheit} × {p.epreis.toFixed(2)} € = <span className="font-medium text-foreground">{((p.menge || 0) * (p.epreis || 0)).toFixed(2)} €</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="bg-muted/30 px-4 py-2 border-t border-border flex justify-between">
+                              <span className="text-sm font-medium">Netto Summe</span>
+                              <span className="font-semibold tabular-nums">
+                                {positions.reduce((sum, p) => sum + (p.menge || 0) * (p.epreis || 0), 0).toFixed(2)} €
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
                     {/* Revenue Guard Block */}
                     {guard && guard.missing.length > 0 && (
                       <div className="mb-6 border border-blue-200 bg-blue-50 rounded p-4">
@@ -741,46 +1264,347 @@ const KalkulaiInterface = () => {
 
               {/* Footer (rechts) */}
               <div className="mt-4 pt-4 border-t border-border">
+                {/* Current offer info */}
+                {(currentOffer || positions.length > 0) && (
+                  <div className="mb-3 flex items-center gap-2">
+                    <Input
+                      placeholder="Angebotstitel (optional)"
+                      value={offerTitle}
+                      onChange={(e) => setOfferTitle(e.target.value)}
+                      className="flex-1 h-9 text-sm"
+                    />
+                    <Input
+                      placeholder="Kunde (optional)"
+                      value={offerKunde}
+                      onChange={(e) => setOfferKunde(e.target.value)}
+                      className="flex-1 h-9 text-sm"
+                    />
+                  </div>
+                )}
                 <div className="flex gap-3 justify-center">
-                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
+                  <Button
+                    variant="outline"
+                    className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-primary/10 hover:border-primary' : 'bg-muted text-muted-foreground border-muted'}`}
+                    disabled={positions.length === 0}
+                    onClick={handleStartEditing}
+                    title={positions.length === 0 ? "Erst Positionen erstellen" : "Angebot bearbeiten"}
+                  >
                     <Edit className="w-4 h-4 mr-2" />
                     Bearbeiten
                   </Button>
-                  <Button variant="outline" className="px-6 py-2 bg-muted hover:bg-muted/80 text-muted-foreground border-muted">
-                    <Save className="w-4 h-4 mr-2" />
-                    Speichern
+                  <Button 
+                    variant="outline" 
+                    className={`px-6 py-2 ${positions.length > 0 ? 'hover:bg-green-50 hover:border-green-500 hover:text-green-700' : 'bg-muted text-muted-foreground border-muted'}`}
+                    disabled={positions.length === 0 || isSavingOffer}
+                    onClick={handleSaveOffer}
+                    title={positions.length === 0 ? "Erst Positionen erstellen" : "In Bibliothek speichern"}
+                  >
+                    {isSavingOffer ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4 mr-2" />
+                    )}
+                    {currentOffer ? "Aktualisieren" : "Speichern"}
                   </Button>
                 </div>
               </div>
+                </>
+              )}
             </Card>
           </div>
         </div>
+        )}
       </main>
 
       {/* Dialogs */}
-      <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
-        <DialogContent className="max-w-xl space-y-6">
+      <Dialog open={isProfileDialogOpen} onOpenChange={(open) => {
+        setIsProfileDialogOpen(open);
+        if (open) {
+          setProfileName(user?.name || "");
+          setProfileMessage(null);
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+          setPasswordMessage(null);
+          setNewEmail("");
+          setEmailPassword("");
+          setEmailMessage(null);
+        }
+      }}>
+        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
           <DialogHeader className="space-y-1 text-left">
             <DialogTitle>Mein Profil</DialogTitle>
             <DialogDescription>
-              Passe deine persönlichen Angaben an und bereite dein Team auf kommende Projekte vor.
+              Verwalte deine persönlichen Daten und Zugangsdaten.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            {profileCategories.map((category) => (
-              <div
-                key={category.title}
-                className="rounded-xl border border-border bg-muted/40 p-4 transition hover:border-primary hover:bg-muted/60"
-              >
-                <h3 className="text-sm font-semibold text-foreground">{category.title}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
+          
+          <Tabs defaultValue="profile" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="profile">Profil</TabsTrigger>
+              <TabsTrigger value="password">Passwort</TabsTrigger>
+              <TabsTrigger value="email">E-Mail</TabsTrigger>
+            </TabsList>
+            
+            {/* Profile Tab */}
+            <TabsContent value="profile" className="mt-4 space-y-4">
+              <div className="flex items-center gap-4 p-4 bg-muted/40 rounded-lg">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <span className="text-2xl font-semibold text-primary">
+                    {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div>
+                  <p className="font-medium">{user?.name || "Kein Name"}</p>
+                  <p className="text-sm text-muted-foreground">{user?.email}</p>
+                </div>
               </div>
-            ))}
+              
+          <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="profile-name">Name</Label>
+                  <Input
+                    id="profile-name"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    placeholder="Dein Name"
+                  />
+                </div>
+                
+                {profileMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    profileMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {profileMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setIsUpdatingProfile(true);
+                    setProfileMessage(null);
+                    try {
+                      await updateProfile(profileName);
+                      setProfileMessage({ type: "success", text: "Profil erfolgreich aktualisiert" });
+                    } catch (err: any) {
+                      setProfileMessage({ type: "error", text: err.message || "Fehler beim Aktualisieren" });
+                    } finally {
+                      setIsUpdatingProfile(false);
+                    }
+                  }}
+                  disabled={isUpdatingProfile || profileName === user?.name}
+                  className="w-full"
+                >
+                  {isUpdatingProfile ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird gespeichert...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
+                      Name speichern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+            
+            {/* Password Tab */}
+            <TabsContent value="password" className="mt-4 space-y-4">
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="current-password">Aktuelles Passwort</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="current-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="pl-10 pr-10"
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords(!showPasswords)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
           </div>
-          <DialogFooter className="sm:justify-between">
-            <span className="text-xs text-muted-foreground">
-              Mehr Funktionen folgen im nächsten Release.
-            </span>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">Neues Passwort</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="new-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Mindestens 6 Zeichen"
+                    />
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-password">Passwort bestätigen</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="confirm-password"
+                      type={showPasswords ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Passwort wiederholen"
+                    />
+                  </div>
+                </div>
+                
+                {passwordMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    passwordMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {passwordMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setPasswordMessage(null);
+                    
+                    if (newPassword !== confirmPassword) {
+                      setPasswordMessage({ type: "error", text: "Passwörter stimmen nicht überein" });
+                      return;
+                    }
+                    if (newPassword.length < 6) {
+                      setPasswordMessage({ type: "error", text: "Passwort muss mindestens 6 Zeichen lang sein" });
+                      return;
+                    }
+                    
+                    setIsChangingPassword(true);
+                    try {
+                      await changePassword(currentPassword, newPassword);
+                      setPasswordMessage({ type: "success", text: "Passwort erfolgreich geändert" });
+                      setCurrentPassword("");
+                      setNewPassword("");
+                      setConfirmPassword("");
+                    } catch (err: any) {
+                      setPasswordMessage({ type: "error", text: err.message || "Fehler beim Ändern" });
+                    } finally {
+                      setIsChangingPassword(false);
+                    }
+                  }}
+                  disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
+                  className="w-full"
+                >
+                  {isChangingPassword ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird geändert...
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="mr-2 h-4 w-4" />
+                      Passwort ändern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+            
+            {/* Email Tab */}
+            <TabsContent value="email" className="mt-4 space-y-4">
+              <div className="p-3 bg-muted/40 rounded-lg">
+                <p className="text-sm text-muted-foreground">
+                  Aktuelle E-Mail: <span className="font-medium text-foreground">{user?.email}</span>
+                </p>
+              </div>
+              
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="new-email">Neue E-Mail-Adresse</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="new-email"
+                      type="email"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className="pl-10"
+                      placeholder="neue@email.de"
+                    />
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="email-password">Passwort zur Bestätigung</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="email-password"
+                      type="password"
+                      value={emailPassword}
+                      onChange={(e) => setEmailPassword(e.target.value)}
+                      className="pl-10"
+                      placeholder="Dein aktuelles Passwort"
+                    />
+                  </div>
+                </div>
+                
+                {emailMessage && (
+                  <div className={`p-3 rounded-lg text-sm ${
+                    emailMessage.type === "success" 
+                      ? "bg-green-50 border border-green-200 text-green-700" 
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}>
+                    {emailMessage.text}
+                  </div>
+                )}
+                
+                <Button 
+                  onClick={async () => {
+                    setEmailMessage(null);
+                    setIsChangingEmail(true);
+                    try {
+                      await changeEmail(newEmail, emailPassword);
+                      setEmailMessage({ type: "success", text: "E-Mail erfolgreich geändert" });
+                      setNewEmail("");
+                      setEmailPassword("");
+                    } catch (err: any) {
+                      setEmailMessage({ type: "error", text: err.message || "Fehler beim Ändern" });
+                    } finally {
+                      setIsChangingEmail(false);
+                    }
+                  }}
+                  disabled={isChangingEmail || !newEmail || !emailPassword}
+                  className="w-full"
+                >
+                  {isChangingEmail ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Wird geändert...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="mr-2 h-4 w-4" />
+                      E-Mail ändern
+                    </>
+                  )}
+                </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
+          
+          <DialogFooter>
             <Button variant="outline" onClick={() => setIsProfileDialogOpen(false)}>
               Schließen
             </Button>
@@ -797,8 +1621,9 @@ const KalkulaiInterface = () => {
             </DialogDescription>
           </DialogHeader>
           <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="overview">Übersicht</TabsTrigger>
+              <TabsTrigger value="designs">Layouts</TabsTrigger>
               <TabsTrigger value="database">Datenbank</TabsTrigger>
               <TabsTrigger value="guard">Vergessener Wächter</TabsTrigger>
             </TabsList>
@@ -812,6 +1637,77 @@ const KalkulaiInterface = () => {
                   <p className="text-sm text-muted-foreground mt-1">{category.description}</p>
                 </div>
               ))}
+            </TabsContent>
+            <TabsContent value="designs" className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">PDF-Grundgerüste</h3>
+                  <p className="text-sm text-muted-foreground">Wähle das Layout, das am besten zu deiner Außendarstellung passt.</p>
+                </div>
+                {activeTemplate && (
+                  <span className="text-xs text-muted-foreground">
+                    Aktiv:&nbsp;
+                    <span className="font-semibold text-foreground">{activeTemplate.label}</span>
+                  </span>
+                )}
+              </div>
+              {templateError && (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+                  {templateError}
+                </div>
+              )}
+              {isLoadingTemplates ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Layouts werden geladen …
+                </div>
+              ) : offerTemplates.length === 0 ? (
+                <div className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                  Noch keine Layouts verfügbar.
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {offerTemplates.map((tpl) => {
+                    const isActiveTemplate = tpl.id === selectedTemplateId || (!selectedTemplateId && tpl.is_default);
+                    return (
+                      <button
+                        type="button"
+                        key={tpl.id}
+                        onClick={() => handleTemplateSelect(tpl.id)}
+                        className={`rounded-2xl border px-5 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                          isActiveTemplate
+                            ? "border-primary bg-primary/5 ring-primary/40"
+                            : "border-border hover:border-primary/40 hover:bg-muted/40"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                              <Palette className="h-4 w-4 text-muted-foreground" />
+                              {tpl.label}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">{tpl.tagline}</p>
+                          </div>
+                          {isActiveTemplate && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                              <Check className="h-3 w-3" />
+                              Aktiv
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="mt-3 h-20 rounded-xl border transition"
+                          style={{
+                            borderColor: tpl.accent,
+                            background: `linear-gradient(135deg, ${tpl.background} 0%, #ffffff 100%)`,
+                          }}
+                        />
+                        <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{tpl.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </TabsContent>
             <TabsContent value="database" className="mt-4">
               <DatabaseManager />
