@@ -20,6 +20,13 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 
+# Load .env EARLY (before any local imports that might read env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
 # Add backend dir to path so we can import with 'app.' prefix
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -45,6 +52,7 @@ from app import admin_api
 from app import auth_api
 from app import auth
 from app import offers_api
+from app import speech_api
 from app.services import quote_service as _quote_service_module
 from retriever.thin import search_catalog_thin as _thin_search_catalog
 from store import catalog_store
@@ -58,12 +66,6 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 # ---------- Pfade & ENV ----------
-try:  # bevorzugt lokale .env lesen, auch wenn uvicorn sie nicht lädt
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
-except Exception:
-    pass
-
 DATA_ROOT  = Path(os.getenv("DATA_ROOT", str(BASE_DIR)))
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
@@ -534,6 +536,7 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
 app.include_router(auth_api.router)
 app.include_router(offers_api.router)
+app.include_router(speech_api.router)
 
 # Root (Health)
 @app.get("/")

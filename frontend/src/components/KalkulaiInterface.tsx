@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Mic, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
+import { Mic, MicOff, Camera, MessageSquare, ArrowUp, Edit, Save, FileText, UserCircle, ChevronDown, User, Settings, LogOut, Mail, Lock, Loader2, Eye, EyeOff, Check, RotateCcw, Palette } from "lucide-react";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -93,6 +94,25 @@ const normalizePositions = (items: OfferPosition[]): OfferPosition[] =>
 const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
   const { user, token, logout, changePassword, changeEmail, updateProfile } = useAuth();
   
+  // Voice Input
+  const {
+    isListening,
+    interimTranscript,
+    startListening,
+    stopListening,
+    isEnabled: isVoiceEnabled,
+    isChecking: isVoiceChecking,
+    error: voiceError,
+    clearTranscript: clearVoiceTranscript,
+  } = useVoiceInput({
+    language: "de-DE",
+    onTranscript: (text) => {
+      // Append final transcript to input
+      setInputText((prev) => prev ? `${prev} ${text}` : text);
+    },
+    silenceTimeout: 3000, // Stop after 3s of silence
+  });
+
   const [activeTab, setActiveTab] = useState<"angebot" | "rechnung">("angebot");
   const [activeNav, setActiveNav] = useState<"erstellen" | "bibliothek">("erstellen");
   const [leftMode, setLeftMode] = useState<"chat" | "wizard">("chat");
@@ -1078,13 +1098,63 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                       className="w-full min-h-[44px] resize-none border-none outline-none text-base leading-6 placeholder:text-muted-foreground bg-transparent p-0"
                       rows={1}
                     />
+                    {/* Voice interim transcript preview */}
+                    {(isListening || interimTranscript) && (
+                      <div className="mb-2 px-3 py-2 bg-primary/10 rounded-lg border border-primary/20">
+                        <div className="flex items-center gap-2">
+                          <div className="relative">
+                            <Mic className="w-4 h-4 text-primary" />
+                            {isListening && (
+                              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                            )}
+                          </div>
+                          <span className="text-sm text-primary/80 italic">
+                            {interimTranscript || "Höre zu..."}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Voice error message */}
+                    {voiceError && (
+                      <div className="mb-2 px-3 py-2 bg-destructive/10 rounded-lg border border-destructive/20">
+                        <span className="text-sm text-destructive">{voiceError}</span>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center gap-2 pt-2">
                       <div className="flex items-center gap-1.5">
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <MessageSquare className="w-4 h-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8">
-                          <Mic className="w-4 h-4" />
+                        <Button 
+                          size="icon" 
+                          variant={isListening ? "default" : "ghost"}
+                          className={`h-8 w-8 transition-all ${isListening ? "bg-red-500 hover:bg-red-600 text-white" : ""}`}
+                          onClick={() => {
+                            if (isListening) {
+                              stopListening();
+                            } else {
+                              clearVoiceTranscript();
+                              startListening();
+                            }
+                          }}
+                          disabled={isVoiceChecking || !isVoiceEnabled}
+                          title={
+                            isVoiceChecking 
+                              ? "Prüfe Spracherkennung..." 
+                              : !isVoiceEnabled 
+                                ? "Spracherkennung nicht verfügbar" 
+                                : isListening 
+                                  ? "Aufnahme stoppen" 
+                                  : "Spracheingabe starten"
+                          }
+                        >
+                          {isListening ? (
+                            <MicOff className="w-4 h-4" />
+                          ) : (
+                            <Mic className={`w-4 h-4 ${!isVoiceEnabled && !isVoiceChecking ? "opacity-50" : ""}`} />
+                          )}
                         </Button>
                         <Button size="icon" variant="ghost" className="h-8 w-8">
                           <Camera className="w-4 h-4" />
