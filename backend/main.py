@@ -255,7 +255,7 @@ _CATALOG_LAST_REFRESH = 0
 _CATALOG_CACHE = []
 
 def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Get catalog items from database (dynamic) + static file (fallback)"""
+    """Get catalog items from database (dynamic only)"""
     global _CATALOG_LAST_REFRESH, _CATALOG_CACHE
     
     # Check if cache is still valid
@@ -265,11 +265,29 @@ def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, An
     
     items = []
     
-    # 1. Load from database (dynamic products)
+    # Load from database (dynamic products only)
     try:
         from store.catalog_store import get_active_products
         db_products = get_active_products("demo")
+        
+        # Pre-filter: Exclude test products (Phase 1 improvement)
+        test_prefixes = {"test-", "test_", "demo-", "demo_"}
+        test_keywords = {"test", "demo", "beispiel", "sample"}
+        
         for prod in db_products:
+            sku = str(prod.get("sku", "")).lower()
+            name = str(prod.get("name", "")).lower()
+            
+            # Skip test products by SKU prefix
+            if any(sku.startswith(prefix) for prefix in test_prefixes):
+                continue
+            
+            # Skip obvious test products by name
+            name_tokens = set(name.split())
+            if name_tokens & test_keywords:
+                # Skip if "test", "demo", etc. appears as standalone word
+                continue
+            
             items.append({
                 "sku": prod.get("sku"),
                 "name": prod.get("name"),
@@ -285,20 +303,20 @@ def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, An
                 "brand": None,
                 "description": prod.get("description"),
                 "raw": f"{prod.get('name')} - {prod.get('description', '')}",
+                "is_active": prod.get("is_active", True),  # Pass through for filtering
             })
+        logger.info(f"📦 Catalog loaded from database: {len(items)} active products (test products excluded)")
     except Exception as e:
         import logging
         logging.warning(f"Could not load database products: {e}")
-    
-    # 2. Add static file products (fallback)
-    for doc in DOCUMENTS:
-        items.append(_document_to_catalog_entry(doc))
+        # Fallback to static file products only if database fails
+        for doc in DOCUMENTS:
+            items.append(_document_to_catalog_entry(doc))
+        logger.warning(f"📦 Fallback: Loaded {len(items)} products from static file")
     
     # Update cache
     _CATALOG_CACHE = items
     _CATALOG_LAST_REFRESH = now
-    
-    logger.info(f"📦 Catalog cache refreshed: {len(items)} products loaded")
     
     return items
 

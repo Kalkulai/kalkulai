@@ -910,17 +910,6 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                 Rechnung
               </button>
             </div>
-
-            {/* Settings Button */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsSettingsDialogOpen(true)}
-              className="gap-2"
-            >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Einstellungen</span>
-            </Button>
           </div>
         </div>
       ) : (
@@ -1242,7 +1231,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                           <div className="mb-4 border border-border rounded-lg overflow-hidden">
                             <div className="bg-muted/50 px-4 py-2 border-b border-border">
                               <h3 className="font-semibold text-foreground text-sm">
-                                Angebotspositionen ({positions.length})
+                                Angebotspositionen
                               </h3>
                             </div>
                             <div className="divide-y divide-border max-h-[200px] overflow-y-auto">
@@ -1253,7 +1242,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                                     <span className="font-medium">{p.name}</span>
                                   </div>
                                   <div className="text-right text-muted-foreground">
-                                    {p.menge} {p.einheit} × {p.epreis.toFixed(2)} € = <span className="font-medium text-foreground">{((p.menge || 0) * (p.epreis || 0)).toFixed(2)} €</span>
+                                    {p.menge} {p.einheit} × {p.epreis.toFixed(2)} € = <span className="font-medium text-foreground">{(p.gesamtpreis || 0).toFixed(2)} €</span>
                                   </div>
                                 </div>
                               ))}
@@ -1261,7 +1250,7 @@ const KalkulaiInterface = ({ embedded = false }: KalkulaiInterfaceProps) => {
                             <div className="bg-muted/30 px-4 py-2 border-t border-border flex justify-between">
                               <span className="text-sm font-medium">Netto Summe</span>
                               <span className="font-semibold tabular-nums">
-                                {positions.reduce((sum, p) => sum + (p.menge || 0) * (p.epreis || 0), 0).toFixed(2)} €
+                                {positions.reduce((sum, p) => sum + (p.gesamtpreis || 0), 0).toFixed(2)} €
                               </span>
                             </div>
                           </div>

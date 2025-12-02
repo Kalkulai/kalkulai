@@ -81,6 +81,8 @@ Nach dem Start wird automatisch ein Demo-User erstellt:
 | `MODEL_LLM2` | Angebots-Modell | `gpt-4o-mini` |
 | `VAT_RATE` | Mehrwertsteuersatz | `0.19` |
 | `DEBUG` | Debug-Modus | `0` |
+| `AZURE_SPEECH_KEY` | Azure Speech Services API Key (für Voice Input) | - |
+| `AZURE_SPEECH_REGION` | Azure Region (z.B. "westeurope", "eastus") | `westeurope` |
 
 ### Frontend (.env)
 
@@ -96,6 +98,46 @@ Nach dem Start wird automatisch ein Demo-User erstellt:
 - **Revenue Guard** - Vergessene Materialien automatisch vorschlagen
 - **Produktdatenbank** - Eigene Produkte verwalten (CSV-Import)
 - **Benutzerverwaltung** - Login, Passwort/E-Mail ändern
+- **Voice Input** - Spracherkennung für Spracheingabe (Azure Speech Services)
+
+## 🎤 Voice Input Setup
+
+Das Voice-Input-Feature verwendet Azure Speech Services für die Spracherkennung.
+
+### 1. Azure Speech Services einrichten
+
+1. Erstelle eine Azure Speech Services Ressource im [Azure Portal](https://portal.azure.com)
+2. Kopiere den **Key** und die **Region** (z.B. "westeurope") aus der Ressource
+
+### 2. Umgebungsvariablen konfigurieren
+
+Füge folgende Zeilen zu `backend/.env` hinzu:
+
+```bash
+AZURE_SPEECH_KEY=dein-azure-speech-key-hier
+AZURE_SPEECH_REGION=westeurope
+```
+
+### 3. Backend neu starten
+
+Nach dem Setzen der Umgebungsvariablen muss das Backend neu gestartet werden:
+
+```bash
+cd backend
+python main.py
+```
+
+### 4. Testen
+
+1. Öffne die Anwendung im Browser
+2. Der Mikrofon-Button sollte jetzt aktiv (nicht ausgegraut) sein
+3. Klicke auf den Mikrofon-Button und erlaube den Mikrofonzugriff
+4. Sprich in das Mikrofon - deine Sprache wird in Text umgewandelt
+
+**Hinweis:** Der Button ist ausgegraut, wenn:
+- `AZURE_SPEECH_KEY` nicht gesetzt ist
+- Das Backend nicht läuft
+- Der Browser keine Mikrofonberechtigung erteilt hat
 
 ## 🧪 Tests
 
