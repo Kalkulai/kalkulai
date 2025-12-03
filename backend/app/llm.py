@@ -269,11 +269,17 @@ materialien:
             '  "name": <string>,\n'
             '  "menge": <float>,\n'
             '  "einheit": <string>,\n'
-            '  "epreis": <float>,  # Netto-Einzelpreis\n'
+            '  "epreis": <float>,  # Netto-Einzelpreis pro Gebinde/Einheit\n'
             '  "gesamtpreis": <float>  # optional; falls gesetzt = menge * epreis\n'
             "}}\n"
-            "Verwende unbedingt das Feld \"epreis\" (nicht \"preis\"). Keine zusätzlichen Felder wie \"status\".\n"
-            "Kontext (KATALOG):\n{context}\n\n"
+            "WICHTIG:\n"
+            "- Verwende \"epreis\" (nicht \"preis\")\n"
+            "- Verwende IMMER die Preise aus dem Katalog-Kontext wenn verfügbar\n"
+            "- \"menge\" = Anzahl Gebinde/Einheiten (z.B. 1x 10L Eimer, nicht 10 einzelne Liter)\n"
+            "- \"einheit\" = Gebinde-Einheit (Stück, Eimer, Rolle, etc.)\n"
+            "- \"epreis\" = Preis pro Gebinde (z.B. 89.90 € für 1x 10L Eimer)\n"
+            "\n"
+            "Kontext (KATALOG mit Preisen):\n{context}\n\n"
             "QUESTION (nur den Datenanhang zwischen --- auswerten):\n{question}\n\n"
             "Antwort:"
         ),

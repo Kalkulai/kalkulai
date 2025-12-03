@@ -3,13 +3,17 @@ Authentication API endpoints for Kalkulai.
 """
 from __future__ import annotations
 
-from typing import Optional
+import os
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Body, HTTPException, Header, Depends
 from pydantic import BaseModel, EmailStr
 
 from . import auth
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Dev mode: Disable auth if DISABLE_AUTH=true in .env
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() in ("true", "1", "yes")
 
 
 class LoginRequest(BaseModel):
@@ -44,6 +48,16 @@ class AuthResponse(BaseModel):
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     """Dependency to get current authenticated user."""
+    # Dev mode: Return mock user if auth is disabled
+    if DISABLE_AUTH:
+        return {
+            "id": 1,
+            "email": "dev@kalkulai.local",
+            "name": "Dev User",
+            "created_at": "2024-01-01 00:00:00",
+            "updated_at": "2024-01-01 00:00:00",
+        }
+    
     if not authorization:
         raise HTTPException(status_code=401, detail="Nicht authentifiziert")
     
@@ -262,6 +276,7 @@ def save_offer_layout(
     current_user: dict = Depends(get_current_user),
 ):
     """Persist offer layout configuration for the current user."""
+    import json
     # keep the payload flexible; basic size guard to avoid abuse
     if len(json.dumps(request.layout, ensure_ascii=False)) > 50_000:
         raise HTTPException(status_code=400, detail="Layout ist zu groß")

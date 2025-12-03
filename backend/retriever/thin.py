@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-"""Simple deterministic retrieval for the lightweight ("thin") catalog."""
+"""Simple deterministic retrieval for the lightweight ("thin") catalog.
+
+Now includes Hybrid Search with BM25 + Lexical + RRF.
+"""
 
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 try:  # pragma: no cover - optional dependency
     import yaml  # type: ignore
@@ -19,12 +22,72 @@ from shared.normalize import (  # type: ignore[import]
     tokenize,
 )
 
+# Try to import hybrid search (for upgraded search)
+try:
+    from retriever.hybrid_search import hybrid_search as _hybrid_search, invalidate_bm25_cache
+    _HAS_HYBRID = True
+except ImportError:
+    _HAS_HYBRID = False
+    _hybrid_search = None
+    invalidate_bm25_cache = lambda: None
+
 _CANON_COMPOUND = {"haft", "grund"}
 _PREFIX_BOOST_VALUE = 0.02
 _SUBSTRING_BOOST_VALUE = 0.01
 _SYNONYM_HIT_BONUS = 0.05
 _COMPOUND_BONUS = 0.1
+_EXACT_MATCH_BONUS = 0.25  # Bonus for exact name matches
+_PRICE_AVAILABLE_BONUS = 0.03  # Bonus if product has price
 _RULES_DEFAULT_PATH = Path(__file__).resolve().parents[1] / "shared" / "normalize" / "rules.yaml"
+
+# Pre-filtering: Exclude test products and inactive items
+_TEST_SKU_PREFIXES = {"test-", "test_", "demo-", "demo_"}
+_TEST_NAME_KEYWORDS = {"test", "demo", "beispiel", "sample"}
+
+
+def _pre_filter_catalog(
+    catalog_items: List[Dict[str, object]],
+    category_filter: str | None = None,
+) -> List[Dict[str, object]]:
+    """Pre-filter catalog items to remove test products and apply category filter."""
+    filtered = []
+    
+    # Detect category from common product types if not specified
+    category_keywords = {
+        "paint": {"farbe", "dispersionsfarbe", "latexfarbe", "wandfarbe", "fassadenfarbe"},
+        "primer": {"grund", "grundierung", "tiefengrund", "haftgrund", "sperrgrund"},
+        "tools": {"rolle", "pinsel", "werkzeug", "gerät", "leiter"},
+        "tape": {"klebeband", "malerkrepp", "kreppband", "abklebeband"},
+        "filler": {"spachtel", "spachtelmasse", "füller"},
+    }
+    
+    for item in catalog_items:
+        sku = str(item.get("sku", "")).lower()
+        name = str(item.get("name", "")).lower()
+        
+        # Skip test products by SKU prefix
+        if any(sku.startswith(prefix) for prefix in _TEST_SKU_PREFIXES):
+            continue
+        
+        # Skip test products by name
+        name_tokens = set(name.split())
+        if name_tokens & _TEST_NAME_KEYWORDS:
+            continue
+        
+        # Skip inactive products
+        is_active = item.get("is_active")
+        if is_active is not None and not is_active:
+            continue
+        
+        # Apply category filter if specified
+        if category_filter:
+            item_category = str(item.get("category", "")).lower()
+            if item_category and item_category != category_filter.lower():
+                continue
+        
+        filtered.append(item)
+    
+    return filtered
 
 
 @dataclass(frozen=True)
@@ -41,11 +104,21 @@ def search_catalog_thin(
     top_k: int,
     catalog_items: List[Dict[str, object]],
     synonyms_path: str | None = None,
+    category_filter: str | None = None,
+    use_hybrid: bool = True,  # NEW: Enable hybrid search by default
 ) -> List[Dict[str, object]]:
-    """Return at most *top_k* catalog candidates ranked by lexical similarity.
+    """Return at most *top_k* catalog candidates ranked by similarity.
 
-    The scoring is intentionally deterministic so the thin client can run pure
-    Python retrieval locally without model dependencies.
+    Uses Hybrid Search (BM25 + Lexical + RRF) when available, falls back to
+    lexical-only search otherwise.
+    
+    Args:
+        query: Search query string
+        top_k: Maximum number of results to return
+        catalog_items: List of product dictionaries
+        synonyms_path: Optional path to synonyms file
+        category_filter: Optional category to filter by (e.g. "paint", "primer")
+        use_hybrid: Whether to use hybrid search (BM25 + Lexical + RRF)
     """
 
     if top_k <= 0:
@@ -54,7 +127,37 @@ def search_catalog_thin(
     base_query_tokens = tokenize(query)
     if not base_query_tokens:
         return []
+    
+    # Pre-filter catalog items (remove test products, inactive items, wrong categories)
+    filtered_items = _pre_filter_catalog(catalog_items, category_filter)
+    
+    # Try Hybrid Search first (BM25 + Lexical + RRF)
+    if use_hybrid and _HAS_HYBRID and _hybrid_search:
+        try:
+            hybrid_results = _hybrid_search(
+                query=query,
+                catalog_items=filtered_items,
+                top_k=top_k * 2,  # Get more candidates for better ranking
+                synonyms_path=synonyms_path,
+            )
+            if hybrid_results:
+                # Convert hybrid results to expected format
+                return [
+                    {
+                        "sku": r.get("sku"),
+                        "name": r.get("name"),
+                        "unit": r.get("unit"),
+                        "category": r.get("category"),
+                        "score_final": r.get("score_final", 0.0),
+                        "hard_filters_passed": True,
+                        "reasons": ["hybrid_search (BM25 + Lexical + RRF)"],
+                    }
+                    for r in hybrid_results[:top_k]
+                ]
+        except Exception:
+            pass  # Fall back to lexical search
 
+    # Fallback: Lexical-only search
     synonyms = _load_synonyms_cached(synonyms_path)
     query_tokens = apply_synonyms(base_query_tokens, synonyms) if synonyms else set(base_query_tokens)
     synonym_only_tokens = query_tokens - base_query_tokens
@@ -62,7 +165,7 @@ def search_catalog_thin(
     rulebook = _load_rules_cached()
 
     scored_items: List[Dict[str, object]] = []
-    for item in catalog_items:
+    for item in filtered_items:  # Use pre-filtered items
         entry = _to_catalog_entry(item)
         if entry is None:
             continue
@@ -101,9 +204,25 @@ def search_catalog_thin(
             rule_bonus += _COMPOUND_BONUS
             reasons.append("compound bonus +0.100 (haft+grund)")
 
+        # EXACT MATCH BONUS: Boost products with exact name matches
+        query_normalized = normalize_query(query).replace(" ", "")
+        name_normalized = normalize_query(entry.name).replace(" ", "")
+        if query_normalized and name_normalized and query_normalized == name_normalized:
+            rule_bonus += _EXACT_MATCH_BONUS
+            reasons.append(f"exact match bonus +{_EXACT_MATCH_BONUS:.3f}")
+        elif query_normalized and name_normalized and query_normalized in name_normalized:
+            partial_bonus = _EXACT_MATCH_BONUS * 0.4
+            rule_bonus += partial_bonus
+            reasons.append(f"partial match bonus +{partial_bonus:.3f}")
+
+        # PRICE AVAILABLE BONUS: Prefer products with pricing
+        if _has_price(item):
+            rule_bonus += _PRICE_AVAILABLE_BONUS
+            reasons.append(f"price available +{_PRICE_AVAILABLE_BONUS:.3f}")
+
         score_lex = round(score_lex, 3)
         rule_bonus = round(rule_bonus, 3)
-        score_final = round(0.8 * score_lex + 0.2 * rule_bonus, 3)
+        score_final = round(0.7 * score_lex + 0.3 * rule_bonus, 3)  # Increased rule_bonus weight
 
         scored_items.append(
             {
@@ -144,6 +263,69 @@ def _to_catalog_entry(raw: Dict[str, object]) -> _CatalogEntry | None:
         category=str(category) if category is not None else None,
         metadata=raw,
     )
+
+
+def _detect_category_from_query(query_tokens: Set[str]) -> str | None:
+    """Detect product category from query tokens."""
+    category_keywords = {
+        "paint": {"farbe", "dispersionsfarbe", "latexfarbe", "wandfarbe", "fassadenfarbe"},
+        "primer": {"grund", "grundierung", "tiefengrund", "haftgrund", "sperrgrund"},
+        "tools": {"rolle", "pinsel", "werkzeug", "gerät", "leiter"},
+        "tape": {"klebeband", "malerkrepp", "kreppband", "abklebeband"},
+        "filler": {"spachtel", "spachtelmasse", "füller"},
+    }
+    
+    for category, keywords in category_keywords.items():
+        if query_tokens & keywords:
+            return category
+    
+    return None
+
+
+def _passes_pre_filters(
+    entry: _CatalogEntry, 
+    raw_item: Dict[str, object],
+    category_filter: str | None = None,
+) -> bool:
+    """Pre-filter to exclude test products, inactive items, and wrong categories."""
+    
+    # Filter 1: Exclude test/demo products by SKU
+    sku_lower = entry.sku.lower()
+    for prefix in _TEST_SKU_PREFIXES:
+        if sku_lower.startswith(prefix):
+            return False
+    
+    # Filter 2: Exclude test/demo products by name (only if very obvious)
+    name_lower = entry.name.lower()
+    name_tokens = set(name_lower.split())
+    # Only exclude if "test" or "demo" is a standalone word, not part of another word
+    if name_tokens & _TEST_NAME_KEYWORDS:
+        # Exception: Allow if it's part of a compound word like "testalarm" or "demonstration"
+        if any(keyword in name_lower for keyword in ["testfarbe", "testprodukt", "demo-", "beispiel"]):
+            return False
+    
+    # Filter 3: Only include active products (if is_active field exists)
+    is_active = raw_item.get("is_active")
+    if is_active is not None and not is_active:
+        return False
+    
+    # Filter 4: Category filter (if specified)
+    if category_filter and entry.category:
+        if entry.category.lower() != category_filter.lower():
+            return False
+    
+    return True
+
+
+def _has_price(item: Dict[str, object]) -> bool:
+    """Check if product has pricing information."""
+    price = item.get("price_eur")
+    if price is None:
+        return False
+    try:
+        return float(price) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _passes_token_gate(query_tokens: Set[str], item_tokens: Set[str]) -> bool:

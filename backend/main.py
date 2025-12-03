@@ -20,6 +20,13 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 
+# Load .env EARLY (before any local imports that might read env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
 # Add backend dir to path so we can import with 'app.' prefix
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -45,6 +52,7 @@ from app import admin_api
 from app import auth_api
 from app import auth
 from app import offers_api
+from app import speech_api
 from app.services import quote_service as _quote_service_module
 from retriever.thin import search_catalog_thin as _thin_search_catalog
 from store import catalog_store
@@ -58,12 +66,6 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 # ---------- Pfade & ENV ----------
-try:  # bevorzugt lokale .env lesen, auch wenn uvicorn sie nicht lädt
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
-except Exception:
-    pass
-
 DATA_ROOT  = Path(os.getenv("DATA_ROOT", str(BASE_DIR)))
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_ROOT / "chroma_db")))
@@ -253,7 +255,7 @@ _CATALOG_LAST_REFRESH = 0
 _CATALOG_CACHE = []
 
 def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Get catalog items from database (dynamic) + static file (fallback)"""
+    """Get catalog items from database (dynamic only)"""
     global _CATALOG_LAST_REFRESH, _CATALOG_CACHE
     
     # Check if cache is still valid
@@ -263,11 +265,29 @@ def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, An
     
     items = []
     
-    # 1. Load from database (dynamic products)
+    # Load from database (dynamic products only)
     try:
         from store.catalog_store import get_active_products
         db_products = get_active_products("demo")
+        
+        # Pre-filter: Exclude test products (Phase 1 improvement)
+        test_prefixes = {"test-", "test_", "demo-", "demo_"}
+        test_keywords = {"test", "demo", "beispiel", "sample"}
+        
         for prod in db_products:
+            sku = str(prod.get("sku", "")).lower()
+            name = str(prod.get("name", "")).lower()
+            
+            # Skip test products by SKU prefix
+            if any(sku.startswith(prefix) for prefix in test_prefixes):
+                continue
+            
+            # Skip obvious test products by name
+            name_tokens = set(name.split())
+            if name_tokens & test_keywords:
+                # Skip if "test", "demo", etc. appears as standalone word
+                continue
+            
             items.append({
                 "sku": prod.get("sku"),
                 "name": prod.get("name"),
@@ -283,20 +303,20 @@ def _get_dynamic_catalog_items(force_refresh: bool = False) -> List[Dict[str, An
                 "brand": None,
                 "description": prod.get("description"),
                 "raw": f"{prod.get('name')} - {prod.get('description', '')}",
+                "is_active": prod.get("is_active", True),  # Pass through for filtering
             })
+        logger.info(f"📦 Catalog loaded from database: {len(items)} active products (test products excluded)")
     except Exception as e:
         import logging
         logging.warning(f"Could not load database products: {e}")
-    
-    # 2. Add static file products (fallback)
-    for doc in DOCUMENTS:
-        items.append(_document_to_catalog_entry(doc))
+        # Fallback to static file products only if database fails
+        for doc in DOCUMENTS:
+            items.append(_document_to_catalog_entry(doc))
+        logger.warning(f"📦 Fallback: Loaded {len(items)} products from static file")
     
     # Update cache
     _CATALOG_CACHE = items
     _CATALOG_LAST_REFRESH = now
-    
-    logger.info(f"📦 Catalog cache refreshed: {len(items)} products loaded")
     
     return items
 
@@ -534,6 +554,7 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.include_router(admin_api.router)
 app.include_router(auth_api.router)
 app.include_router(offers_api.router)
+app.include_router(speech_api.router)
 
 # Root (Health)
 @app.get("/")

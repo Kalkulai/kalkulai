@@ -209,6 +209,9 @@ def _run_thin_catalog_search(**kwargs):
         func = getattr(backend_main, "search_catalog_thin", default_search_catalog_thin)
     except Exception:
         func = default_search_catalog_thin
+    # Ensure category_filter parameter is passed (new in Phase 1)
+    if 'category_filter' not in kwargs:
+        kwargs['category_filter'] = None
     return func(**kwargs)
 
 
@@ -3375,9 +3378,42 @@ def generate_offer_positions(
 
     chunks, total_chars = [], 0
     for line in ctx_lines:
-        t = line[:1000]
-        chunks.append(t)
-        total_chars += len(t)
+        # Enrich context with DB prices if available
+        enriched_line = line[:1000]
+        
+        # Try to find product in catalog by matching SKU or name in the line
+        found_price = False
+        for sku in matched_skus:
+            if sku and sku in line:
+                catalog_entry = ctx.catalog_by_sku.get(sku)
+                if catalog_entry and catalog_entry.get("price_eur"):
+                    price = catalog_entry.get("price_eur")
+                    volume = catalog_entry.get("volume_l")
+                    unit = catalog_entry.get("unit") or "Stück"
+                    if volume and unit == "l":
+                        enriched_line += f"\n[PREIS: {price:.2f} € für {volume}L Gebinde]"
+                    else:
+                        enriched_line += f"\n[PREIS: {price:.2f} € pro Einheit]"
+                    found_price = True
+                    break
+        
+        # If no SKU match, try matching by product name
+        if not found_price:
+            for name in normalized_names:
+                if name.lower() in line.lower():
+                    catalog_entry = ctx.catalog_by_name.get(name.lower())
+                    if catalog_entry and catalog_entry.get("price_eur"):
+                        price = catalog_entry.get("price_eur")
+                        volume = catalog_entry.get("volume_l")
+                        unit = catalog_entry.get("unit") or "Stück"
+                        if volume and unit == "l":
+                            enriched_line += f"\n[PREIS: {price:.2f} € für {volume}L Gebinde]"
+                        else:
+                            enriched_line += f"\n[PREIS: {price:.2f} € pro Einheit]"
+                        break
+        
+        chunks.append(enriched_line)
+        total_chars += len(enriched_line)
         if total_chars > 8000:
             break
 
@@ -3560,7 +3596,21 @@ def generate_offer_positions(
             pos2["gesamtpreis"] = round(epreis_val * menge_val, 2)
         harmonized_positions.append(pos2)
     positions = _enforce_locked_quantities(harmonized_positions, latest_items, ctx)
-    final_positions = positions
+    
+    # Convert to package units (Stück) so frontend shows same values as PDF
+    from shared.package_converter import convert_to_package_units
+    converted_positions = convert_to_package_units(positions, ctx.catalog_by_name)
+    
+    # Recalculate gesamtpreis after conversion
+    for pos in converted_positions:
+        try:
+            menge_val = float(pos.get("menge", 0))
+            epreis_val = float(pos.get("epreis", 0))
+            pos["gesamtpreis"] = round(menge_val * epreis_val, 2)
+        except (TypeError, ValueError):
+            pass
+    
+    final_positions = converted_positions
     # raw now mirrors the final offer positions so clients see consistent numbers everywhere.
     return {"positions": final_positions, "raw": json.dumps(final_positions, ensure_ascii=False)}
 
