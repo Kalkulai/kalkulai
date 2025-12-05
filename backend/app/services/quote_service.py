@@ -35,8 +35,16 @@ from retriever.thin import search_catalog_thin as default_search_catalog_thin
 from shared.normalize.text import normalize_query as shared_normalize_query
 from shared.normalize.text import tokenize as shared_tokenize
 
-CATALOG_MATCH_THRESHOLD = 0.45
-CATALOG_STRONG_MATCH_THRESHOLD = 0.5  # Lowered from 0.6 for better fuzzy matching with dynamic catalogs
+# Try to import hybrid_search for combined retrieval
+try:
+    from retriever.hybrid_search import hybrid_search as _hybrid_search
+    _HAS_HYBRID_SEARCH = True
+except ImportError:
+    _HAS_HYBRID_SEARCH = False
+    _hybrid_search = None
+
+CATALOG_MATCH_THRESHOLD = 0.35  # Lowered to catch more matches with synonyms
+CATALOG_STRONG_MATCH_THRESHOLD = 0.45  # Lowered from 0.5 for better fuzzy matching with dynamic catalogs
 
 NO_DATA_DETAILS_MESSAGE = (
     "Es liegen noch keine Angebotsdaten vor.\n\n"
@@ -1305,6 +1313,7 @@ class QuoteServiceContext:
     adopt_threshold: float = 0.82
     business_scoring: List[str] = field(default_factory=list)
     llm1_thin_retrieval: bool = False
+    combine_hybrid_vector: bool = False
     catalog_top_k: int = 5
     catalog_cache_ttl: int = 60
     catalog_queries_per_turn: int = 2
@@ -1465,9 +1474,22 @@ def _catalog_lookup(query: str, limit: int, ctx: QuoteServiceContext) -> List[Di
 
     q_lower = _normalize_query(query)
     lexical_candidates: List[Tuple[float, Dict[str, Any]]] = []
+    
+    # Also try with synonyms expanded
+    from shared.normalize import tokenize, apply_synonyms, load_synonyms
+    synonyms = load_synonyms(str(ctx.synonyms_path)) if ctx.synonyms_path else {}
+    query_tokens = tokenize(q_lower)
+    if synonyms:
+        query_tokens = apply_synonyms(query_tokens, synonyms)
+    query_expanded = " ".join(sorted(query_tokens))
+    
     for item in ctx.catalog_items:
         score = _score_entry(q_lower, item)
-        if score >= 0.55:
+        # Also try scoring with expanded query
+        if synonyms:
+            score_expanded = _score_entry(query_expanded, item)
+            score = max(score, score_expanded)
+        if score >= 0.45:  # Lowered threshold to catch more matches
             lexical_candidates.append((score, item))
 
     lexical_candidates.sort(key=lambda tpl: tpl[0], reverse=True)
@@ -2814,6 +2836,47 @@ def _apply_builtin_override_to_suggestion(
         merged["menge"] = override["default_menge"]
     return merged
 
+
+def _create_vector_search_wrapper(ctx: QuoteServiceContext, company_id: Optional[str] = None):
+    """Create a vector search function wrapper for hybrid_search."""
+    def vector_search_fn(query: str, top_k: int) -> List[Dict[str, Any]]:
+        """Vector search wrapper that returns results in the format expected by hybrid_search."""
+        if ctx.retriever is None:
+            return []
+        
+        try:
+            # Use company-specific search if company_id is provided
+            if company_id:
+                hits = index_manager.search_index(company_id, query, top_k=top_k)
+                return [
+                    {
+                        "sku": hit.get("sku"),
+                        "score": hit.get("score", 0.5),
+                    }
+                    for hit in hits
+                ]
+            else:
+                # Use LangChain retriever
+                docs = ctx.retriever.get_relevant_documents(query)[:top_k]
+                results = []
+                for doc in docs:
+                    meta = getattr(doc, "metadata", None) or {}
+                    sku = meta.get("sku")
+                    if sku:
+                        # Try to get a score from metadata, default to 0.5
+                        score = meta.get("score", 0.5)
+                        results.append({
+                            "sku": sku,
+                            "score": float(score) if isinstance(score, (int, float)) else 0.5,
+                        })
+                return results
+        except Exception as exc:
+            ctx.logger.debug("Vector search failed: %s", exc)
+            return []
+    
+    return vector_search_fn
+
+
 def search_catalog(
     *,
     query: str,
@@ -2830,28 +2893,85 @@ def search_catalog(
     if company_id:
         results = _company_catalog_search(company_id, query, limit, ctx)
     else:
-        try:
-            hits = _run_thin_catalog_search(
-                query=query,
-                top_k=limit,
-                catalog_items=ctx.catalog_items,
-                synonyms_path=str(ctx.synonyms_path),
-            )
-            results = [
-                {
-                    "sku": h.get("sku"),
-                    "name": h.get("name"),
-                    "unit": h.get("unit"),
-                    "pack_sizes": h.get("pack_sizes"),
-                    "synonyms": h.get("synonyms", []),
-                    "category": h.get("category"),
-                    "brand": h.get("brand"),
-                    "confidence": round(float(h.get("score_final", 0.0)), 3),
-                }
-                for h in hits
-            ]
-        except Exception as exc:
-            ctx.logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
+        # Check if we should combine Hybrid Search with Vector Search
+        use_combined = (
+            ctx.combine_hybrid_vector
+            and _HAS_HYBRID_SEARCH
+            and _hybrid_search is not None
+            and ctx.retriever is not None
+        )
+        
+        if use_combined:
+            # Use combined Hybrid + Vector Search
+            try:
+                vector_search_fn = _create_vector_search_wrapper(ctx, company_id)
+                hits = _hybrid_search(
+                    query=query,
+                    catalog_items=ctx.catalog_items,
+                    top_k=limit,
+                    company_id=company_id or ctx.default_company_id,
+                    synonyms_path=str(ctx.synonyms_path),
+                    vector_search_fn=vector_search_fn,
+                )
+                results = [
+                    {
+                        "sku": h.get("sku"),
+                        "name": h.get("name"),
+                        "unit": h.get("unit"),
+                        "pack_sizes": h.get("pack_sizes"),
+                        "synonyms": h.get("synonyms", []),
+                        "category": h.get("category"),
+                        "brand": h.get("brand"),
+                        "confidence": round(float(h.get("score_final", 0.0)), 3),
+                    }
+                    for h in hits
+                ]
+            except Exception as exc:
+                ctx.logger.warning("Combined hybrid+vector search failed, falling back to thin search: %s", exc)
+                # Fallback to thin search
+                hits = _run_thin_catalog_search(
+                    query=query,
+                    top_k=limit,
+                    catalog_items=ctx.catalog_items,
+                    synonyms_path=str(ctx.synonyms_path),
+                )
+                results = [
+                    {
+                        "sku": h.get("sku"),
+                        "name": h.get("name"),
+                        "unit": h.get("unit"),
+                        "pack_sizes": h.get("pack_sizes"),
+                        "synonyms": h.get("synonyms", []),
+                        "category": h.get("category"),
+                        "brand": h.get("brand"),
+                        "confidence": round(float(h.get("score_final", 0.0)), 3),
+                    }
+                    for h in hits
+                ]
+        else:
+            # Use standard thin search (Hybrid Search without Vector)
+            try:
+                hits = _run_thin_catalog_search(
+                    query=query,
+                    top_k=limit,
+                    catalog_items=ctx.catalog_items,
+                    synonyms_path=str(ctx.synonyms_path),
+                )
+                results = [
+                    {
+                        "sku": h.get("sku"),
+                        "name": h.get("name"),
+                        "unit": h.get("unit"),
+                        "pack_sizes": h.get("pack_sizes"),
+                        "synonyms": h.get("synonyms", []),
+                        "category": h.get("category"),
+                        "brand": h.get("brand"),
+                        "confidence": round(float(h.get("score_final", 0.0)), 3),
+                    }
+                    for h in hits
+                ]
+            except Exception as exc:
+                ctx.logger.warning("Thin retrieval failed, fallback to legacy _catalog_lookup: %s", exc)
             results = _catalog_lookup(query, limit, ctx)
             if not results and ctx.catalog_items:
                 fallback_entries = ctx.catalog_items[:limit]
@@ -3114,6 +3234,23 @@ def _material_lookup_variants(name: str) -> List[str]:
             if key not in seen:
                 variants.append(cleaned)
                 seen.add(key)
+    
+    # Apply synonyms to generate more variants
+    try:
+        from shared.normalize import tokenize, apply_synonyms, load_synonyms
+        from pathlib import Path
+        synonyms_path = Path(__file__).resolve().parents[1] / "shared" / "normalize" / "synonyms.yaml"
+        synonyms = load_synonyms(str(synonyms_path)) if synonyms_path.exists() else {}
+        
+        if synonyms:
+            base_tokens = tokenize(base)
+            expanded_tokens = apply_synonyms(base_tokens, synonyms)
+            if expanded_tokens != base_tokens:
+                # Generate variant with expanded tokens
+                expanded_name = " ".join(sorted(expanded_tokens))
+                _add(expanded_name)
+    except Exception:
+        pass  # Fallback if synonyms fail
 
     _add(base)
     no_colon = _strip_colon_suffix(base)
@@ -3169,6 +3306,10 @@ def _resolve_catalog_entry_from_name(
         return False, None, []
     suggestions: List[str] = []
     synonym_index = _build_catalog_synonym_map(ctx)
+    best_fallback_entry: Optional[Dict[str, Any]] = None
+    best_fallback_conf: float = 0.0
+    best_fallback_suggestions: List[str] = []
+
     for variant in variants:
         key = variant.lower()
         if not key:
@@ -3176,7 +3317,7 @@ def _resolve_catalog_entry_from_name(
         entry = ctx.catalog_by_name.get(key) or synonym_index.get(key)
         if entry:
             return True, entry, []
-        hits = _thin_catalog_hits(variant, ctx, top_k=3)
+        hits = _thin_catalog_hits(variant, ctx, top_k=5)  # Increased from 3 to 5
         if hits and not suggestions:
             suggestions = [h.get("name") for h in hits if h.get("name")]
         for hit in hits:
@@ -3185,7 +3326,32 @@ def _resolve_catalog_entry_from_name(
                 confidence = float(conf_raw or 0.0)
             except (TypeError, ValueError):
                 confidence = 0.0
-            if confidence < CATALOG_MATCH_THRESHOLD:
+
+            # Special handling for rolle/farbrolle/fassadenrolle matches
+            hit_name_lower = (hit.get("name") or "").lower()
+            variant_lower = variant.lower()
+            rolle_keywords = {"rolle", "farbrolle", "malerrolle", "fassadenrolle"}
+            has_rolle_match = (
+                any(kw in variant_lower for kw in rolle_keywords) and
+                any(kw in hit_name_lower for kw in rolle_keywords)
+            )
+
+            # Lower threshold for rolle matches or if confidence is reasonable
+            threshold = CATALOG_MATCH_THRESHOLD - 0.1 if has_rolle_match else CATALOG_MATCH_THRESHOLD
+
+            if confidence < threshold:
+                # Track as potential fallback even wenn unterhalb des normalen Thresholds
+                if confidence > best_fallback_conf:
+                    sku_fb = (hit.get("sku") or "").strip()
+                    entry_fb = ctx.catalog_by_sku.get(sku_fb) if sku_fb else None
+                    if not entry_fb:
+                        hit_name_fb = (hit.get("name") or "").strip().lower()
+                        if hit_name_fb:
+                            entry_fb = ctx.catalog_by_name.get(hit_name_fb)
+                    if entry_fb:
+                        best_fallback_entry = entry_fb
+                        best_fallback_conf = confidence
+                        best_fallback_suggestions = suggestions or [hit.get("name") or raw_name]
                 continue
             sku = (hit.get("sku") or "").strip()
             if sku:
@@ -3197,6 +3363,15 @@ def _resolve_catalog_entry_from_name(
                 entry = ctx.catalog_by_name.get(hit_name)
                 if entry:
                     return True, entry, suggestions
+
+    # Fallback: akzeptiere den besten Treffer auch unterhalb des normalen Thresholds,
+    # wenn die Konfidenz nicht völlig im Rauschen liegt.
+    # Das macht das System toleranter bei leicht abweichenden Namen (z. B. Farbrolle vs. Fassadenrolle),
+    # birgt aber ein geringes Risiko für „nahe, aber falsche“ Zuordnungen.
+    FALLBACK_MIN_CONFIDENCE = 0.25
+    if best_fallback_entry is not None and best_fallback_conf >= FALLBACK_MIN_CONFIDENCE:
+        return True, best_fallback_entry, best_fallback_suggestions
+
     return False, None, suggestions
 
 
@@ -3241,7 +3416,58 @@ def generate_offer_positions(
                 if line not in seen:
                     ctx_lines.append(line)
                     seen.add(line)
-        if ctx.retriever is not None:
+        
+        # Check if we should use combined Hybrid + Vector Search
+        use_combined = (
+            ctx.combine_hybrid_vector
+            and _HAS_HYBRID_SEARCH
+            and _hybrid_search is not None
+            and ctx.retriever is not None
+        )
+        
+        if use_combined:
+            # Use Hybrid + Vector Search for better quality
+            for t in terms:
+                key = (t or "").strip().lower()
+                if not key or key in ctx.catalog_text_by_name:
+                    continue
+                try:
+                    vector_search_fn = _create_vector_search_wrapper(ctx, company_id)
+                    hits = _hybrid_search(
+                        query=t,
+                        catalog_items=ctx.catalog_items,
+                        top_k=8,
+                        company_id=company_id or ctx.default_company_id,
+                        synonyms_path=str(ctx.synonyms_path),
+                        vector_search_fn=vector_search_fn,
+                    )
+                    # Convert hybrid search results to catalog text lines
+                    for hit in hits:
+                        hit_sku = hit.get("sku")
+                        hit_name = hit.get("name")
+                        if hit_sku and hit_sku in ctx.catalog_text_by_sku:
+                            line = ctx.catalog_text_by_sku[hit_sku]
+                            if line and line not in seen:
+                                ctx_lines.append(line)
+                                seen.add(line)
+                        elif hit_name:
+                            hit_name_lower = hit_name.lower()
+                            if hit_name_lower in ctx.catalog_text_by_name:
+                                line = ctx.catalog_text_by_name[hit_name_lower]
+                                if line and line not in seen:
+                                    ctx_lines.append(line)
+                                    seen.add(line)
+                except Exception as exc:
+                    ctx.logger.debug("Hybrid+Vector search failed for term %s, falling back to vector: %s", t, exc)
+                    # Fallback to vector search
+                    hits = ctx.retriever.get_relevant_documents(t)[:8]
+                    for h in hits:
+                        line = (h.page_content or "").strip()
+                        if line and line not in seen:
+                            ctx_lines.append(line)
+                            seen.add(line)
+        elif ctx.retriever is not None:
+            # Use only Vector Search (original behavior)
             for t in terms:
                 key = (t or "").strip().lower()
                 if not key or key in ctx.catalog_text_by_name:

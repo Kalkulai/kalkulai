@@ -34,11 +34,20 @@ except ImportError:
 _CANON_COMPOUND = {"haft", "grund"}
 _PREFIX_BOOST_VALUE = 0.02
 _SUBSTRING_BOOST_VALUE = 0.01
-_SYNONYM_HIT_BONUS = 0.05
+_SYNONYM_HIT_BONUS = 0.15  # Increased from 0.05 - stronger synonym matching
 _COMPOUND_BONUS = 0.1
 _EXACT_MATCH_BONUS = 0.25  # Bonus for exact name matches
 _PRICE_AVAILABLE_BONUS = 0.03  # Bonus if product has price
+_KEYWORD_MATCH_BONUS = 0.15  # Bonus for critical keyword matches (krepp, tape, etc.)
+_KEYWORD_MISMATCH_PENALTY = 0.3  # Penalty for confusing similar terms (krepp vs kreide)
+_ROLE_SYNONYM_BOOST = 0.2  # Extra boost for rolle/farbrolle/fassadenrolle matches
 _RULES_DEFAULT_PATH = Path(__file__).resolve().parents[1] / "shared" / "normalize" / "rules.yaml"
+
+# Critical keyword pairs that should NOT be confused
+_CONFUSION_PAIRS = [
+    ({"krepp", "kreppband", "malerkrepp", "abklebeband"}, {"kreide", "malerkreide"}),
+    ({"grund", "grundierung", "tiefengrund"}, {"grund", "grundierung"}),  # No confusion here, but for future
+]
 
 # Pre-filtering: Exclude test products and inactive items
 _TEST_SKU_PREFIXES = {"test-", "test_", "demo-", "demo_"}
@@ -199,6 +208,14 @@ def search_catalog_thin(
             reasons.append(
                 f"synonym bonus +{bonus:.3f} via {', '.join(sorted(synonym_matches))}"
             )
+        
+        # SPECIAL: Extra boost for rolle/farbrolle/fassadenrolle matches
+        rolle_keywords = {"rolle", "farbrolle", "malerrolle", "fassadenrolle"}
+        query_has_rolle = bool(query_tokens & rolle_keywords)
+        item_has_rolle = bool(item_tokens & rolle_keywords)
+        if query_has_rolle and item_has_rolle:
+            rule_bonus += _ROLE_SYNONYM_BOOST
+            reasons.append(f"rolle synonym boost +{_ROLE_SYNONYM_BOOST:.3f}")
 
         if _CANON_COMPOUND <= (query_tokens | item_tokens):
             rule_bonus += _COMPOUND_BONUS
@@ -214,14 +231,48 @@ def search_catalog_thin(
             partial_bonus = _EXACT_MATCH_BONUS * 0.4
             rule_bonus += partial_bonus
             reasons.append(f"partial match bonus +{partial_bonus:.3f}")
+        
+        # SIZE/SPECIFICATION MATCH: Boost if size specifications match (25cm, 10L, etc.)
+        import re
+        size_pattern = r'(\d+(?:\.\d+)?)\s*(cm|mm|l|liter|kg|m)'
+        query_sizes = set(re.findall(size_pattern, query.lower()))
+        name_sizes = set(re.findall(size_pattern, entry.name.lower()))
+        if query_sizes and name_sizes and query_sizes & name_sizes:
+            size_match_bonus = 0.1
+            rule_bonus += size_match_bonus
+            reasons.append(f"size specification match +{size_match_bonus:.3f}")
 
         # PRICE AVAILABLE BONUS: Prefer products with pricing
         if _has_price(item):
             rule_bonus += _PRICE_AVAILABLE_BONUS
             reasons.append(f"price available +{_PRICE_AVAILABLE_BONUS:.3f}")
 
+        # KEYWORD MATCH BONUS: Boost critical keywords (krepp, tape, etc.)
+        query_lower = query.lower()
+        name_lower = entry.name.lower()
+        critical_keywords = {"krepp", "kreppband", "malerkrepp", "abklebeband", "tape", "klebeband"}
+        for keyword in critical_keywords:
+            if keyword in query_lower and keyword in name_lower:
+                rule_bonus += _KEYWORD_MATCH_BONUS
+                reasons.append(f"critical keyword match '{keyword}' +{_KEYWORD_MATCH_BONUS:.3f}")
+                break  # Only count once
+        
+        # KEYWORD MISMATCH PENALTY: Penalize confusing matches (krepp vs kreide)
+        for positive_set, negative_set in _CONFUSION_PAIRS:
+            query_has_positive = any(kw in query_lower for kw in positive_set)
+            query_has_negative = any(kw in query_lower for kw in negative_set)
+            name_has_positive = any(kw in name_lower for kw in positive_set)
+            name_has_negative = any(kw in name_lower for kw in negative_set)
+            
+            if query_has_positive and name_has_negative:
+                rule_bonus -= _KEYWORD_MISMATCH_PENALTY
+                reasons.append(f"keyword mismatch penalty -{_KEYWORD_MISMATCH_PENALTY:.3f} (query has {positive_set}, product has {negative_set})")
+            elif query_has_negative and name_has_positive:
+                rule_bonus -= _KEYWORD_MISMATCH_PENALTY
+                reasons.append(f"keyword mismatch penalty -{_KEYWORD_MISMATCH_PENALTY:.3f} (query has {negative_set}, product has {positive_set})")
+
         score_lex = round(score_lex, 3)
-        rule_bonus = round(rule_bonus, 3)
+        rule_bonus = round(max(rule_bonus, -0.5), 3)  # Cap penalty at -0.5
         score_final = round(0.7 * score_lex + 0.3 * rule_bonus, 3)  # Increased rule_bonus weight
 
         scored_items.append(
