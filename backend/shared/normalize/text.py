@@ -182,15 +182,37 @@ def load_synonyms(path: str) -> Dict[str, List[str]]:
 
 
 def apply_synonyms(tokens: Set[str], synonyms: Dict[str, List[str]]) -> Set[str]:
-    """Augment *tokens* with canonical forms derived from *synonyms* mapping."""
+    """Augment *tokens* with synonyms - works bidirectionally.
 
+    If user searches for "holzschutz" and synonyms contains:
+        holzschutz: [holzschutzfarbe, holzlasur]
+
+    Then the search tokens are expanded to include holzschutzfarbe, holzlasur.
+
+    Also works reverse: if user searches for "holzschutzfarbe" and it's a variant,
+    the canonical form "holzschutz" is added.
+
+    Note: Both *tokens* and *synonyms* should already be normalized via normalize_query().
+    """
     if not tokens:
         return set()
 
     result = set(tokens)
+    
     for canon, variants in synonyms.items():
-        if any(token in result for token in variants):
-            result.add(canon)
+        canon_lower = canon.lower()
+        variants_lower = [v.lower() for v in variants]
+        
+        # Direction 1: Token is canon → add all variants
+        # e.g., "holzschutz" in tokens → add "holzschutzfarbe", "holzlasur"
+        if canon_lower in result:
+            result.update(variants_lower)
+        
+        # Direction 2: Token is a variant → add canon
+        # e.g., "holzschutzfarbe" in tokens → add "holzschutz"
+        if any(v in result for v in variants_lower):
+            result.add(canon_lower)
+    
     return result
 
 

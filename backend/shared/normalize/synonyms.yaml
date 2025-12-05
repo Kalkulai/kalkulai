@@ -1,28 +1,248 @@
-haftgrund:
-  - tiefgrund
-  - haftgrundierung
-  - grundierung haft
-  - grundiermittel
-dispersionsfarbe:
-  - wandfarbe
-  - innenfarbe
-  - dispersions anstrich
-lack_weiss:
-  - weißlack
-  - weisser lack
-  - lack weiss
-abklebeband:
-  - kreppband
-  - malerkrepp
-  - abdeckband
-  - abdeck band
-tiefgrund:
-  - tief grund
-  - tief-grund
-putzgrund:
-  - putz grund
-  - putz-grund
-malerrolle:
-  - farbrolle
-  - farb rolle
-  - farb-rolle
+-mineralfarbe:
+- silikat-mineralfarbe
+abdeck:
+- abdeckpapier
+abdeckpapier 25m:
+- Abdeckpapier 50m
+abdeckpapier 50m:
+- Abdeckpapier 25m
+- Malerkrepp 50m
+acryl:
+- acryllack
+acryllack weiß glänzend 750ml:
+- Holzlasur Kiefer 750ml
+- Holzschutzfarbe deckend 750ml
+anzug:
+- maleranzug
+- schutzanzug
+- einweganzug
+aussen:
+- außenfarbe
+- fassadenfarbe
+- außen
+außen:
+- außenfarbe
+- fassadenfarbe
+- außen
+band:
+- gewebeband
+bunt:
+- buntlack
+buntlack seidenmatt 2.5l:
+- Buntlack seidenmatt 750ml
+buntlack seidenmatt 750ml:
+- Buntlack seidenmatt 2.5L
+böcke:
+- gerüstböcke
+dispersion:
+- dispersionsfarbe
+dispersions:
+- dispersionsfarbe
+dispersionsfarbe weiß matt 10l:
+- Testfarbe Weiß 10L
+- Latexfarbe weiß 10L
+- Fassadenfarbe weiß 12.5L
+- Fassadenfarbe weiß 5L
+eimer:
+- farbeimer
+- eimer set
+entferner:
+- silikonentferner
+farbe:
+- latexfarbe
+- tafelfarbe
+- kalkfarbe
+- magnetfarbe
+- farbeimer-set
+- fassadenfarbe
+farbrolle:
+- fassadenrolle
+- lackierrolle
+- malerrolle
+- schaumstoffrolle
+fassade:
+- fassadenrolle
+- fassadenfarbe
+fassaden:
+- fassadenrolle
+- fassadenfarbe
+fassadenfarbe weiß 12.5l:
+- Fassadenfarbe weiß 5L
+- Dispersionsfarbe weiß matt 10L
+fassadenfarbe weiß 5l:
+- Fassadenfarbe weiß 12.5L
+- Dispersionsfarbe weiß matt 10L
+fertig:
+- fertigspachtel
+fugen:
+- fugenspachtel
+gerüst:
+- gerüstböcke
+gewebe:
+- gewebeband
+grund:
+- tiefengrund
+- haftgrund
+- sperrgrund
+- isoliergrund
+- grundierung
+grundierung:
+- tiefengrund
+- haftgrund
+- sperrgrund
+- isoliergrund
+haft:
+- haftgrund
+handschuh:
+- handschuhe
+- nitrilhandschuhe
+- einweghandschuhe
+heizkörper:
+- heizkörperpinsel
+holz:
+- holzspachtel
+- holzlasur
+- holzschutzfarbe
+holzfarbe:
+- holzschutzfarbe
+holzlasur kiefer 2.5l:
+- Holzlasur Kiefer 750ml
+holzlasur kiefer 750ml:
+- Holzlasur Kiefer 2.5L
+- Acryllack weiß glänzend 750ml
+holzschutz:
+- holzschutzfarbe
+- holzlasur
+- holzschutzlasur
+holzschutzfarbe deckend 2.5l:
+- Holzschutzfarbe deckend 750ml
+holzschutzfarbe deckend 750ml:
+- Holzschutzfarbe deckend 2.5L
+- Acryllack weiß glänzend 750ml
+ierrolle:
+- lackierrolle
+imer-set:
+- farbeimer-set
+innen:
+- innenfarbe
+- dispersionsfarbe
+- wandfarbe
+isolier:
+- isoliergrund
+isoliergrund sperrgrund 2.5l:
+- Isoliergrund Sperrgrund 750ml
+isoliergrund sperrgrund 750ml:
+- Isoliergrund Sperrgrund 2.5L
+kalk:
+- kalkfarbe
+klebeband:
+- malerkrepp
+- kreppband
+- abklebeband
+- gewebeband
+lack:
+- lackierrolle
+- acryllack
+- buntlack
+lackier:
+- lackierrolle
+lasur:
+- holzlasur
+- lasurpinsel
+latex:
+- latexfarbe
+latexfarbe weiß 10l:
+- Latexfarbe weiß 5L
+- Dispersionsfarbe weiß matt 10L
+latexfarbe weiß 5l:
+- Latexfarbe weiß 10L
+magnet:
+- magnetfarbe
+maler:
+- malerkrepp
+- maleracryl
+malerkreide-set:
+- Malerkrepp 50m
+malerkrepp 50m:
+- Malerkreide-Set
+- Abdeckpapier 50m
+maske:
+- staubmaske
+- atemschutzmaske
+- schutzmaske
+nfarbe:
+- fassadenfarbe
+nrolle:
+- fassadenrolle
+pinsel:
+- lasurpinsel
+reparatur:
+- reparaturspachtel
+rolle:
+- farbrolle
+- fassadenrolle
+- lackierrolle
+rost:
+- rostschutzfarbe
+rostfarbe:
+- rostschutzfarbe
+rostschutz:
+- rostschutzfarbe
+rostschutzfarbe 2.5l:
+- Rostschutzfarbe 750ml
+rostschutzfarbe 750ml:
+- Rostschutzfarbe 2.5L
+rühr:
+- rührquirl
+sanitär:
+- sanitärsilikon
+schutzfarbe:
+- holzschutzfarbe
+- rostschutzfarbe
+sfarbe:
+- dispersionsfarbe
+silikat:
+- silikat-mineralfarbe
+silikat-farbe:
+- silikat-mineralfarbe
+silikat-mineral:
+- silikat-mineralfarbe
+silikon:
+- silikonentferner
+spachtel:
+- fertigspachtel
+- reparaturspachtel
+- holzspachtel
+- gipskartonspachtel
+spray:
+- farbspray
+- lackspray
+- haftgrund spray
+staubmaske:
+- staubschutzmaske
+tafel:
+- tafelfarbe
+tape:
+- malerkrepp
+- klebeband
+- gewebeband
+teleskop:
+- teleskopstange
+test:
+- testfarbe
+testfarbe weiß 10l:
+- Dispersionsfarbe weiß matt 10L
+tiefen:
+- tiefengrund
+tritt:
+- trittleiter
+verduennung:
+- verdünner
+- nitroverdünnung
+- lösemittel
+verdünnung:
+- verdünner
+- nitroverdünnung
+- lösemittel
+wanne:
+- farbwanne

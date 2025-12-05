@@ -18,9 +18,12 @@ import math
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from shared.normalize import normalize_query, tokenize, apply_synonyms, load_synonyms
+
+_DEFAULT_SYNONYMS_PATH = Path(__file__).parent.parent / "shared" / "normalize" / "synonyms.yaml"
 
 # Cross-Encoder for re-ranking (optional)
 _RERANKER = None
@@ -239,8 +242,8 @@ def bm25_search(
         if score > 0:
             scored.append((sku, score))
     
-    # Sort by score descending
-    scored.sort(key=lambda x: x[1], reverse=True)
+    # Sort by score descending, tie-break by SKU ascending for determinism
+    scored.sort(key=lambda x: (-x[1], x[0]))
     return scored[:top_k]
 
 
@@ -270,9 +273,9 @@ def reciprocal_rank_fusion(
         for rank, (sku, _) in enumerate(ranking, start=1):
             rrf_scores[sku] += 1.0 / (k + rank)
     
-    # Sort by RRF score descending
+    # Sort by RRF score descending, tie-break by SKU ascending for determinism
     combined = [(sku, score) for sku, score in rrf_scores.items()]
-    combined.sort(key=lambda x: x[1], reverse=True)
+    combined.sort(key=lambda x: (-x[1], x[0]))
     
     return combined
 
@@ -339,11 +342,12 @@ def hybrid_search(
         p["name"].lower(): p for p in catalog_items if p.get("name")
     }
     
-    # Load synonyms
+    # Load synonyms (use default path if not specified)
     synonyms = {}
-    if synonyms_path:
+    effective_synonyms_path = synonyms_path or str(_DEFAULT_SYNONYMS_PATH)
+    if Path(effective_synonyms_path).exists():
         try:
-            synonyms = load_synonyms(synonyms_path)
+            synonyms = load_synonyms(effective_synonyms_path)
         except Exception:
             pass
     
@@ -379,7 +383,8 @@ def hybrid_search(
             overlap_ratio = overlap / max(len(query_tokens), 1)
             lexical_results.append((sku, overlap_ratio))
     
-    lexical_results.sort(key=lambda x: x[1], reverse=True)
+    # Sort by score descending, tie-break by SKU ascending for determinism
+    lexical_results.sort(key=lambda x: (-x[1], x[0]))
     lexical_results = lexical_results[:50]
     
     # -------------------------------------------------------------------------

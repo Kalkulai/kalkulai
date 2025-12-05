@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:  # Preferred
     from sqlmodel import Field, Session, SQLModel, UniqueConstraint, create_engine, select
@@ -255,6 +258,7 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
             session.refresh(product)
             data = product.dict()
             data.pop("id", None)
+            trigger_synonym_regeneration(company_id)
             return data
 
     with _sqlite_conn() as conn:
@@ -322,7 +326,9 @@ def upsert_product(company_id: str, product_dict: Dict[str, object]) -> Dict[str
             """,
             (company_id, sku),
         ).fetchone()
-        return _normalize_product_row(dict(row))
+        result = _normalize_product_row(dict(row))
+        trigger_synonym_regeneration(company_id)
+        return result
 
 
 def list_products(
@@ -387,6 +393,7 @@ def delete_product(company_id: str, sku: str) -> bool:
             product.updated_at = timestamp
             session.add(product)
             session.commit()
+            trigger_synonym_regeneration(company_id)
             return True
     with _sqlite_conn() as conn:
         cur = conn.execute(
@@ -394,7 +401,10 @@ def delete_product(company_id: str, sku: str) -> bool:
             (timestamp.isoformat(), company_id, sku),
         )
         conn.commit()
-        return cur.rowcount > 0
+        result = cur.rowcount > 0
+        if result:
+            trigger_synonym_regeneration(company_id)
+        return result
 
 
 def list_synonyms(company_id: str) -> Dict[str, List[str]]:
@@ -500,3 +510,33 @@ def _normalize_product_row(data: Dict[str, object]) -> Dict[str, object]:
     if "is_active" in data:
         data["is_active"] = bool(data["is_active"])
     return data
+
+
+def trigger_synonym_regeneration(company_id: str) -> None:
+    """Trigger async synonym regeneration after product changes."""
+    import threading
+    
+    def _regenerate():
+        try:
+            from tools.generate_synonyms import generate_synonyms, merge_into_yaml
+            from pathlib import Path
+            
+            synonyms_path = Path(__file__).parent.parent / "shared" / "normalize" / "synonyms.yaml"
+            
+            # Generate new synonyms
+            new_synonyms = generate_synonyms(
+                company_id=company_id,
+                min_similarity=0.60,
+                max_synonyms=5,
+            )
+            
+            # Merge into existing file
+            if new_synonyms:
+                merge_into_yaml(new_synonyms, synonyms_path)
+                logger.info(f"Synonyms regenerated for company {company_id}: {len(new_synonyms)} entries")
+        except Exception as e:
+            logger.warning(f"Synonym regeneration failed: {e}")
+    
+    # Run in background thread to not block the request
+    thread = threading.Thread(target=_regenerate, daemon=True)
+    thread.start()

@@ -84,7 +84,8 @@ OPENAI_API_KEY  = (os.getenv("OPENAI_API_KEY") or "").strip() or None
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 VAT_RATE        = float(os.getenv("VAT_RATE", "0.19"))
 SKIP_LLM_SETUP  = os.getenv("SKIP_LLM_SETUP", "0") == "1"
-LLM1_THIN_RETRIEVAL = os.getenv("LLM1_THIN_RETRIEVAL", "0") == "1"
+LLM1_THIN_RETRIEVAL = os.getenv("LLM1_THIN_RETRIEVAL", "1") == "1"  # Default: enabled for good balance
+COMBINE_HYBRID_VECTOR = os.getenv("COMBINE_HYBRID_VECTOR", "1") == "1"  # Default: enabled for best quality
 CATALOG_TOP_K       = max(1, int(os.getenv("CATALOG_TOP_K", "5")))
 CATALOG_CACHE_TTL   = max(5, int(os.getenv("CATALOG_CACHE_TTL", "60")))
 CATALOG_QUERIES_PER_TURN = max(1, int(os.getenv("CATALOG_QUERIES_PER_TURN", "2")))
@@ -98,10 +99,12 @@ BUSINESS_SCORING = [
     if flag.strip()
 ]
 logger.info(
-    "Flags: LLM1_MODE=%s ADOPT_THRESHOLD=%.2f BUSINESS_SCORING=%s",
+    "Flags: LLM1_MODE=%s ADOPT_THRESHOLD=%.2f BUSINESS_SCORING=%s LLM1_THIN_RETRIEVAL=%s COMBINE_HYBRID_VECTOR=%s",
     LLM1_MODE,
     ADOPT_THRESHOLD,
     BUSINESS_SCORING,
+    LLM1_THIN_RETRIEVAL,
+    COMBINE_HYBRID_VECTOR,
 )
 
 _DEFAULT_ALLOWED_ORIGINS = [
@@ -495,6 +498,7 @@ SERVICE_CONTEXT = QuoteServiceContext(
     adopt_threshold=ADOPT_THRESHOLD,
     business_scoring=BUSINESS_SCORING,
     llm1_thin_retrieval=LLM1_THIN_RETRIEVAL,
+    combine_hybrid_vector=COMBINE_HYBRID_VECTOR,
     catalog_top_k=CATALOG_TOP_K,
     catalog_cache_ttl=CATALOG_CACHE_TTL,
     catalog_queries_per_turn=CATALOG_QUERIES_PER_TURN,
